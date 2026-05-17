@@ -256,7 +256,11 @@ bun run mcp            # start the MCP server locally
 ## Voice assistants
 
 - **Siri** — built into the iOS app, no setup needed. Say "Log nappy in Nestling" or "Start sleep in Nestling".
-- **Alexa** — see [`nestling-alexa/`](../nestling-alexa/) for a self-hosted Alexa skill that tracks feeds, sleep, and nappies by voice.
+- **Alexa** — self-hosted Alexa skill that tracks feeds, sleep, and nappies by voice. Source and deploy instructions are in [`nestling-alexa`](https://github.com/kparmesar/nestling/tree/main/nestling-alexa) (part of the main Nestling repo). Deploy with AWS SAM:
+  ```bash
+  cd nestling-alexa && npm install && npm run build && sam build && sam deploy --guided
+  ```
+  Then paste the interaction model JSON and Lambda ARN into the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
 
 ## Limitations
 
