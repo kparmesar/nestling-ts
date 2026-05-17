@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Nestling Alexa Skill — track feeds, sleep, and nappies by voice
+
+Parameters:
+  NestlingApiToken:
+    Type: String
+    NoEcho: true
+    Description: API token from the Nestling app (Settings → Data → API Token)
+  Timezone:
+    Type: String
+    Default: Europe/London
+    Description: IANA timezone string for spoken times (e.g., America/New_York, Australia/Sydney)
+
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+
+Resources:
+  NestlingAlexaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: dist/index.handler
+      MemorySize: 256
+      Environment:
+        Variables:
+          NESTLING_API_TOKEN: !Ref NestlingApiToken
+          TIMEZONE: !Ref Timezone
+      Events:
+        AlexaSkill:
+          Type: AlexaSkill
+
+Outputs:
+  FunctionArn:
+    Description: Lambda ARN to paste into the Alexa Developer Console endpoint
+    Value: !GetAtt NestlingAlexaFunction.Arn

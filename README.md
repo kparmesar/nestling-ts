@@ -255,17 +255,98 @@ bun run mcp            # start the MCP server locally
 
 ## Voice assistants
 
-- **Siri** — built into the iOS app, no setup needed. Say "Log nappy in Nestling" or "Start sleep in Nestling".
-- **Alexa** — self-hosted Alexa skill that tracks feeds, sleep, and nappies by voice. Source and deploy instructions are in [`nestling-alexa`](https://github.com/kparmesar/nestling/tree/main/nestling-alexa) (part of the main Nestling repo). Deploy with AWS SAM:
-  ```bash
-  cd nestling-alexa && npm install && npm run build && sam build && sam deploy --guided
-  ```
-  Then paste the interaction model JSON and Lambda ARN into the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
+### Siri
+
+Built into the iOS app — no setup needed. Say things like:
+
+- "Log nappy in Nestling"
+- "Start sleep in Nestling"
+- "Log breastfeed in Nestling"
+- "Log bottle in Nestling"
+
+Works via the Shortcuts app on iOS 16+.
+
+### Alexa
+
+The [`alexa/`](alexa/) directory contains a self-hosted Alexa skill that tracks feeds, sleep, and nappies by voice. It runs on your own AWS account as a Lambda function.
+
+#### Voice commands
+
+| What you want to do | Say |
+|---|---|
+| Start sleep | "Alexa, tell Nestling to start sleep" |
+| Stop sleep | "Alexa, tell Nestling to stop sleep" |
+| Pause / resume sleep | "Alexa, tell Nestling to pause sleep" |
+| Log a wet nappy | "Alexa, tell Nestling to log a wee nappy" |
+| Log a dirty nappy | "Alexa, tell Nestling to log a poo nappy" |
+| Log a wet and dirty nappy | "Alexa, tell Nestling to log a wet and dirty nappy" |
+| Start nursing | "Alexa, tell Nestling to start nursing" |
+| Switch sides | "Alexa, tell Nestling to switch sides" |
+| Stop nursing | "Alexa, tell Nestling to stop nursing" |
+| Log a bottle | "Alexa, tell Nestling to log a 120 ml bottle" |
+| Log solids | "Alexa, tell Nestling to log sweet potato" |
+| Last sleep | "Alexa, ask Nestling for the last sleep" |
+| Last feed | "Alexa, ask Nestling for the last feed" |
+| Last nappy | "Alexa, ask Nestling for the last nappy" |
+
+Both **nappy/diaper** and **wee/pee** are accepted.
+
+#### Prerequisites
+
+- AWS account with permissions to deploy CloudFormation stacks and Lambda functions
+- [Alexa Developer account](https://developer.amazon.com/alexa) (free)
+- Nestling account with at least one baby added
+- Your API token from the Nestling app (Settings → Data → API Token for AI Access)
+- Node.js 20+ and npm
+- [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+
+#### Deploy
+
+```bash
+cd alexa
+npm install
+npm run build
+sam build
+sam deploy --guided
+```
+
+SAM will prompt for:
+
+| Parameter | Description | Example |
+|---|---|---|
+| `NestlingApiToken` | API token from the app | (base64 string) |
+| `Timezone` | IANA timezone for spoken times | `Europe/London` |
+
+After the stack deploys, copy the **Lambda ARN** from the outputs.
+
+#### Connect to Alexa
+
+1. Open the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask)
+2. Create a new **Custom** skill (choose "Provision your own" hosting)
+3. Go to **Build** → **Interaction Model** → **JSON Editor**
+4. Paste the contents of [`alexa/skill/interactionModel.json`](alexa/skill/interactionModel.json)
+5. Under **Endpoint**, select **AWS Lambda ARN** and paste your Lambda ARN
+6. Click **Save Model**, then **Build Model**
+7. Test in the Alexa simulator or on your device
+
+#### Updating
+
+After code changes or a new API token:
+
+```bash
+cd alexa && npm run build && sam build && sam deploy
+```
+
+#### Security
+
+- Your API token is stored as an encrypted Lambda environment variable (`NoEcho`)
+- It is never logged or included in Alexa responses
+- All Supabase queries run through Row Level Security — the token can only access your own data
 
 ## Limitations
 
 - **Create-only.** No update or delete. New entries sync to the app automatically.
-- **Bun only.** The package is published as raw TypeScript, which Bun executes directly. It won't run on Node.js.
+- **Bun only.** The CLI and library require Bun. The Alexa skill uses Node.js (deployed as a Lambda).
 
 ## License
 

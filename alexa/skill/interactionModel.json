@@ -1,0 +1,275 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "nestling",
+      "intents": [
+        {
+          "name": "StartSleepIntent",
+          "slots": [],
+          "samples": [
+            "start sleep",
+            "start sleep timer",
+            "begin sleep",
+            "baby is sleeping",
+            "start nap",
+            "begin nap"
+          ]
+        },
+        {
+          "name": "StopSleepIntent",
+          "slots": [],
+          "samples": [
+            "stop sleep",
+            "stop sleep timer",
+            "end sleep",
+            "baby woke up",
+            "baby is awake",
+            "stop nap",
+            "end nap"
+          ]
+        },
+        {
+          "name": "PauseSleepIntent",
+          "slots": [],
+          "samples": [
+            "pause sleep",
+            "pause sleep timer",
+            "pause nap"
+          ]
+        },
+        {
+          "name": "ResumeSleepIntent",
+          "slots": [],
+          "samples": [
+            "resume sleep",
+            "resume sleep timer",
+            "continue sleep",
+            "resume nap"
+          ]
+        },
+        {
+          "name": "LogNappyIntent",
+          "slots": [
+            {
+              "name": "nappyType",
+              "type": "NAPPY_TYPE"
+            }
+          ],
+          "samples": [
+            "log a {nappyType} nappy",
+            "log a {nappyType} diaper",
+            "log {nappyType} nappy",
+            "log {nappyType} diaper",
+            "log a nappy change {nappyType}",
+            "nappy change {nappyType}",
+            "diaper change {nappyType}",
+            "log a {nappyType}",
+            "log nappy {nappyType}"
+          ]
+        },
+        {
+          "name": "StartNursingIntent",
+          "slots": [
+            {
+              "name": "side",
+              "type": "FEED_SIDE"
+            }
+          ],
+          "samples": [
+            "start nursing",
+            "start nursing on {side}",
+            "start breastfeeding",
+            "start breastfeed",
+            "begin nursing",
+            "nursing on {side}",
+            "start feed on {side}"
+          ]
+        },
+        {
+          "name": "SwitchSidesIntent",
+          "slots": [],
+          "samples": [
+            "switch sides",
+            "switch side",
+            "other side",
+            "swap sides"
+          ]
+        },
+        {
+          "name": "StopNursingIntent",
+          "slots": [],
+          "samples": [
+            "stop nursing",
+            "stop breastfeeding",
+            "end nursing",
+            "done nursing",
+            "finished nursing"
+          ]
+        },
+        {
+          "name": "LogBottleIntent",
+          "slots": [
+            {
+              "name": "amount",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "unit",
+              "type": "VOLUME_UNIT"
+            }
+          ],
+          "samples": [
+            "log a {amount} {unit} bottle",
+            "log a bottle {amount} {unit}",
+            "log bottle {amount} {unit}",
+            "log a bottle",
+            "log bottle feed",
+            "log a {amount} ml bottle",
+            "log {amount} ounce bottle",
+            "log {amount} ounces bottle"
+          ]
+        },
+        {
+          "name": "LogSolidsIntent",
+          "slots": [
+            {
+              "name": "food",
+              "type": "AMAZON.Food"
+            }
+          ],
+          "samples": [
+            "log {food}",
+            "log solids {food}",
+            "log solid food {food}",
+            "baby had {food}",
+            "baby ate {food}"
+          ]
+        },
+        {
+          "name": "LastSleepIntent",
+          "slots": [],
+          "samples": [
+            "last sleep",
+            "when did the baby last sleep",
+            "when was the last nap",
+            "when was the last sleep",
+            "last nap"
+          ]
+        },
+        {
+          "name": "LastFeedIntent",
+          "slots": [],
+          "samples": [
+            "last feed",
+            "last feeding",
+            "when was the last feed",
+            "when did the baby last eat",
+            "last bottle",
+            "last nursing"
+          ]
+        },
+        {
+          "name": "LastNappyIntent",
+          "slots": [],
+          "samples": [
+            "last nappy",
+            "last diaper",
+            "when was the last nappy",
+            "when was the last diaper",
+            "last nappy change",
+            "last diaper change"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        }
+      ],
+      "types": [
+        {
+          "name": "NAPPY_TYPE",
+          "values": [
+            {
+              "id": "wet",
+              "name": {
+                "value": "wet",
+                "synonyms": ["wee", "pee", "number one"]
+              }
+            },
+            {
+              "id": "dirty",
+              "name": {
+                "value": "dirty",
+                "synonyms": ["poo", "poop", "soiled", "number two"]
+              }
+            },
+            {
+              "id": "both",
+              "name": {
+                "value": "wet and dirty",
+                "synonyms": ["both", "mixed", "wee and poo", "pee and poo"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "FEED_SIDE",
+          "values": [
+            {
+              "id": "left",
+              "name": {
+                "value": "left",
+                "synonyms": ["left side"]
+              }
+            },
+            {
+              "id": "right",
+              "name": {
+                "value": "right",
+                "synonyms": ["right side"]
+              }
+            },
+            {
+              "id": "both",
+              "name": {
+                "value": "both",
+                "synonyms": ["both sides"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "VOLUME_UNIT",
+          "values": [
+            {
+              "id": "ml",
+              "name": {
+                "value": "ml",
+                "synonyms": ["millilitres", "milliliters", "mils"]
+              }
+            },
+            {
+              "id": "oz",
+              "name": {
+                "value": "ounce",
+                "synonyms": ["ounces", "oz", "fluid ounce", "fluid ounces"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
