@@ -8,24 +8,18 @@ import { isIsoDateTimeString } from "../validation.js";
 
 // ── Environment ──
 
-const NESTLING_REFRESH_TOKEN = process.env.NESTLING_REFRESH_TOKEN;
-const NESTLING_SUPABASE_URL = process.env.NESTLING_SUPABASE_URL;
-const NESTLING_SUPABASE_ANON_KEY = process.env.NESTLING_SUPABASE_ANON_KEY;
+const NESTLING_API_TOKEN = process.env.NESTLING_API_TOKEN;
 const NESTLING_TIMEZONE = process.env.NESTLING_TIMEZONE ?? "UTC";
 
-if (!NESTLING_REFRESH_TOKEN || !NESTLING_SUPABASE_URL || !NESTLING_SUPABASE_ANON_KEY) {
-  console.error(
-    "Missing required env vars: NESTLING_REFRESH_TOKEN, NESTLING_SUPABASE_URL, NESTLING_SUPABASE_ANON_KEY",
-  );
+if (!NESTLING_API_TOKEN) {
+  console.error("Missing required env var: NESTLING_API_TOKEN");
   process.exit(1);
 }
 
 // ── Client ──
 
 const client = new Nestling({
-  supabaseUrl: NESTLING_SUPABASE_URL,
-  supabaseAnonKey: NESTLING_SUPABASE_ANON_KEY,
-  refreshToken: NESTLING_REFRESH_TOKEN,
+  apiToken: NESTLING_API_TOKEN,
 });
 
 // ── Helpers ──

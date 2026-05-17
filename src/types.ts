@@ -129,12 +129,8 @@ export interface CreateDiaryInput {
 // ── Client options ──
 
 export interface NestlingOptions {
-  /** Supabase project URL (e.g. https://xyz.supabase.co) */
-  supabaseUrl: string;
-  /** Supabase anon (public) key */
-  supabaseAnonKey: string;
-  /** Supabase refresh token (from the Nestling app Settings → Developer → API Token) */
-  refreshToken: string;
+  /** API token from the Nestling app (Settings → Data → API Token) */
+  apiToken: string;
 }
 
 // ── Error types ──

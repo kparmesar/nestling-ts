@@ -12,30 +12,33 @@ TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app
 
 ## Install
 
-Add to a project:
+From a source checkout (not yet published to npm):
 
 ```bash
-bun add nestling-ts
+cd nestling-ts
+bun install
+bun link          # makes `nestling` available globally
 ```
-
-Or run the MCP server with no install via `bunx` (see [MCP server](#mcp-server) below).
 
 ## CLI
 
 ### Quick start
 
 ```bash
-bunx --package nestling-ts nestling login
-# or, inside a project where nestling-ts is installed:
-bun run nestling login
-# Supabase URL: https://your-project.supabase.co
-# Supabase Anon Key: eyJ...
+nestling login
 # API Token: (from Nestling app → Settings → Data → API Token)
 # Timezone: Europe/London
 # ✓ Authenticated as you@example.com! Found 1 child(ren).
 
-bunx --package nestling-ts nestling babies
+nestling babies
 # • Eloise (id: abc-123)  8 months old
+```
+
+If you haven't run `bun link`, use the package script instead:
+
+```bash
+bun run --cwd /path/to/nestling-ts nestling -- login
+bun run --cwd /path/to/nestling-ts nestling -- babies
 ```
 
 ### Commands
@@ -69,9 +72,7 @@ Configuration is stored at `~/.config/nestling/config.json`.
 
 - Interactive login: `nestling login`
 - Environment variables (take precedence over config file):
-  - `NESTLING_REFRESH_TOKEN`
-  - `NESTLING_SUPABASE_URL`
-  - `NESTLING_SUPABASE_ANON_KEY`
+  - `NESTLING_API_TOKEN`
   - `NESTLING_TIMEZONE` (optional)
 
 ## Library usage
@@ -80,9 +81,7 @@ Configuration is stored at `~/.config/nestling/config.json`.
 import { Nestling } from "nestling-ts";
 
 const client = new Nestling({
-  supabaseUrl: process.env.NESTLING_SUPABASE_URL!,
-  supabaseAnonKey: process.env.NESTLING_SUPABASE_ANON_KEY!,
-  refreshToken: process.env.NESTLING_REFRESH_TOKEN!,
+  apiToken: process.env.NESTLING_API_TOKEN!,
 });
 
 // Authenticate
@@ -135,26 +134,7 @@ await client.close();
 
 ### Claude Desktop / Claude Code config
 
-The recommended setup uses `bunx` so there's nothing to install or keep up to date:
-
-```json
-{
-  "mcpServers": {
-    "nestling": {
-      "command": "bunx",
-      "args": ["--package", "nestling-ts", "nestling-mcp"],
-      "env": {
-        "NESTLING_REFRESH_TOKEN": "your-token-from-nestling-app",
-        "NESTLING_SUPABASE_URL": "https://your-project.supabase.co",
-        "NESTLING_SUPABASE_ANON_KEY": "eyJ...",
-        "NESTLING_TIMEZONE": "Europe/London"
-      }
-    }
-  }
-}
-```
-
-If you've added `nestling-ts` as a dependency in a project, you can instead point at the installed bin:
+Point at the source checkout:
 
 ```json
 {
@@ -162,12 +142,10 @@ If you've added `nestling-ts` as a dependency in a project, you can instead poin
     "nestling": {
       "command": "bun",
       "args": ["run", "nestling-mcp"],
-      "cwd": "/absolute/path/to/your/project",
+      "cwd": "/absolute/path/to/nestling-ts",
       "env": {
-        "NESTLING_REFRESH_TOKEN": "...",
-        "NESTLING_SUPABASE_URL": "...",
-        "NESTLING_SUPABASE_ANON_KEY": "...",
-        "NESTLING_TIMEZONE": "..."
+        "NESTLING_API_TOKEN": "your-token-from-nestling-app",
+        "NESTLING_TIMEZONE": "Europe/London"
       }
     }
   }
@@ -231,7 +209,7 @@ Read tools return data; write tools create new entries (no update or delete).
 3. Tap **Copy Token**.
 4. Paste the token into your MCP config or environment variables.
 
-The token is tied to your account. You can revoke it at any time by signing out and back in — this generates a new token and invalidates the old one.
+The token is tied to your account. You can revoke it at any time by tapping **API Token** again — generating a new token invalidates the old one.
 
 ## API reference
 
@@ -239,9 +217,7 @@ The token is tied to your account. You can revoke it at any time by signing out 
 
 | Option             | Type     | Notes                                |
 | ------------------- | -------- | ------------------------------------ |
-| `supabaseUrl`      | `string` | Your Nestling Supabase project URL   |
-| `supabaseAnonKey`  | `string` | Supabase anon (public) key           |
-| `refreshToken`     | `string` | API token from the Nestling app      |
+| `apiToken`         | `string` | API token from the Nestling app      |
 
 ### Read methods
 
@@ -270,10 +246,17 @@ The token is tied to your account. You can revoke it at any time by signing out 
 
 ```bash
 bun install
+bun link               # register `nestling` and `nestling-mcp` on your PATH
 bun test               # run the test suite
 bun run lint           # tsc --noEmit
-bun run mcp            # start the MCP server locally against your env credentials
+bun run nestling       # run the CLI (e.g. bun run nestling -- babies)
+bun run mcp            # start the MCP server locally
 ```
+
+## Voice assistants
+
+- **Siri** — built into the iOS app, no setup needed. Say "Log nappy in Nestling" or "Start sleep in Nestling".
+- **Alexa** — see [`nestling-alexa/`](../nestling-alexa/) for a self-hosted Alexa skill that tracks feeds, sleep, and nappies by voice.
 
 ## Limitations
 

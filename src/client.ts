@@ -37,8 +37,13 @@ export class Nestling {
   public readonly nappies: NappyDomain;
   public readonly diary: DiaryDomain;
 
+  /** Nestling Supabase project URL — same for all users */
+  static readonly SUPABASE_URL = "https://qfpmkjoyxoizztghpalf.supabase.co";
+  /** Nestling Supabase anon key — public, safe to embed */
+  static readonly SUPABASE_ANON_KEY = "sb_publishable_ff_weK7w5-LCnovg6snqXQ_lG3Je_28";
+
   constructor(private opts: NestlingOptions) {
-    this.supabase = createClient(opts.supabaseUrl, opts.supabaseAnonKey, {
+    this.supabase = createClient(Nestling.SUPABASE_URL, Nestling.SUPABASE_ANON_KEY, {
       auth: { autoRefreshToken: true, persistSession: false },
     });
 
@@ -49,14 +54,35 @@ export class Nestling {
     this.diary = new DiaryDomain(this);
   }
 
-  /** Authenticate using the refresh token and return the user ID */
+  /** Decode a base64-encoded API token into email + password */
+  private static decodeApiToken(token: string): { email: string; password: string } {
+    let decoded: string;
+    try {
+      decoded = atob(token);
+    } catch {
+      throw new AuthenticationError(
+        "Invalid API token format. Generate a new one from the Nestling app (Settings → Data → API Token).",
+      );
+    }
+    const idx = decoded.indexOf("\n");
+    if (idx === -1) {
+      throw new AuthenticationError(
+        "Invalid API token format. Generate a new one from the Nestling app (Settings → Data → API Token).",
+      );
+    }
+    return { email: decoded.substring(0, idx), password: decoded.substring(idx + 1) };
+  }
+
+  /** Authenticate using the API token and return the user ID */
   async signIn(): Promise<string> {
-    const { data, error } = await this.supabase.auth.refreshSession({
-      refresh_token: this.opts.refreshToken,
+    const { email, password } = Nestling.decodeApiToken(this.opts.apiToken);
+    const { data, error } = await this.supabase.auth.signInWithPassword({
+      email,
+      password,
     });
     if (error || !data.user) {
       throw new AuthenticationError(
-        error?.message ?? "Session refresh failed — token may be expired",
+        error?.message ?? "Sign-in failed — token may be invalid or revoked",
       );
     }
     this.userId = data.user.id;

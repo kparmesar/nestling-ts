@@ -12,9 +12,7 @@ const CONFIG_DIR = path.join(os.homedir(), ".config", "nestling");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
 interface Config {
-  refreshToken: string;
-  supabaseUrl: string;
-  supabaseAnonKey: string;
+  apiToken: string;
   timezone?: string;
 }
 
@@ -22,16 +20,75 @@ const FEED_TYPES = ["Breastfeeding", "Bottle", "Solids", "Expressing"] as const;
 const FEED_SIDES = ["Left", "Right", "Both"] as const;
 const NAPPY_TYPES = ["Wet", "Dirty", "Both"] as const;
 
+async function askLine(question: string): Promise<string> {
+  const rl = await import("readline");
+  const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await new Promise((resolve) => iface.question(question, (answer: string) => resolve(answer.trim())));
+  } finally {
+    iface.close();
+  }
+}
+
+async function askHiddenLine(question: string): Promise<string> {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return askLine(question);
+  }
+
+  process.stdout.write(question);
+  process.stdin.resume();
+  process.stdin.setRawMode(true);
+  process.stdin.setEncoding("utf8");
+
+  return await new Promise((resolve, reject) => {
+    let answer = "";
+
+    const cleanup = () => {
+      process.stdin.off("data", onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    };
+
+    const onData = (chunk: string | Buffer) => {
+      const text = chunk.toString();
+
+      for (const char of text) {
+        if (char === "\u0003") {
+          cleanup();
+          reject(new Error("Cancelled"));
+          return;
+        }
+
+        if (char === "\r" || char === "\n") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve(answer.trim());
+          return;
+        }
+
+        if (char === "\u007f" || char === "\b") {
+          answer = answer.slice(0, -1);
+          continue;
+        }
+
+        if (char >= " " && char !== "\u001b") {
+          answer += char;
+        }
+      }
+    };
+
+    process.stdin.on("data", onData);
+  });
+}
+
 function isConfig(value: unknown): value is Config {
   if (!value || typeof value !== "object") {
     return false;
   }
 
-  const candidate = value as Partial<Config>;
+  const candidate = value as Partial<Config & { refreshToken?: string }>;
   return (
-    typeof candidate.refreshToken === "string" &&
-    typeof candidate.supabaseUrl === "string" &&
-    typeof candidate.supabaseAnonKey === "string" &&
+    (typeof candidate.apiToken === "string" || typeof candidate.refreshToken === "string") &&
     (candidate.timezone === undefined || typeof candidate.timezone === "string")
   );
 }
@@ -56,32 +113,34 @@ function saveConfig(config: Config): void {
 
 function getConfig(): Config {
   // Env vars take precedence
-  const envToken = process.env.NESTLING_REFRESH_TOKEN;
-  const envUrl = process.env.NESTLING_SUPABASE_URL;
-  const envKey = process.env.NESTLING_SUPABASE_ANON_KEY;
+  const envToken = process.env.NESTLING_API_TOKEN;
 
-  if (envToken && envUrl && envKey) {
+  if (envToken) {
     return {
-      refreshToken: envToken,
-      supabaseUrl: envUrl,
-      supabaseAnonKey: envKey,
+      apiToken: envToken,
       timezone: process.env.NESTLING_TIMEZONE,
     };
   }
 
   const config = loadConfig();
-  if (config) return config;
+  if (config) {
+    // Migrate old refreshToken configs
+    if (!config.apiToken && (config as any).refreshToken) {
+      console.error("Your saved config uses the old refresh token format.");
+      console.error("Please re-run the login command for this checkout or install.");
+      process.exit(1);
+    }
+    return config;
+  }
 
-  console.error("Not logged in. Run: nestling login");
+  console.error("Not logged in. Run `nestling login` if installed, or `bun run nestling -- login` from this checkout.");
   process.exit(1);
 }
 
 async function getClient(): Promise<Nestling> {
   const config = getConfig();
   const client = new Nestling({
-    supabaseUrl: config.supabaseUrl,
-    supabaseAnonKey: config.supabaseAnonKey,
-    refreshToken: config.refreshToken,
+    apiToken: config.apiToken,
   });
   await client.signIn();
   return client;
@@ -135,44 +194,16 @@ function normalizeChoice<T extends readonly string[]>(
 // ── Commands ──
 
 async function cmdLogin(): Promise<void> {
-  const rl = await import("readline");
-  const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string): Promise<string> =>
-    new Promise((res) => iface.question(q, (a: string) => res(a.trim())));
-
-  let muted = false;
-  const output = iface as typeof iface & {
-    output: NodeJS.WriteStream & { mute?: boolean; _writeToOutput?: (value: string) => void };
-  };
-  const originalWrite = output.output._writeToOutput?.bind(output.output);
-  output.output._writeToOutput = (value: string) => {
-    if (!muted) {
-      originalWrite?.(value);
-    }
-  };
-  const askHidden = async (q: string): Promise<string> => {
-    process.stdout.write(q);
-    muted = true;
-    const answer = await ask("");
-    muted = false;
-    console.log();
-    return answer;
-  };
-
   console.log("Nestling CLI Login");
-  console.log("Enter your API token and Supabase connection details.\n");
+  console.log("Enter your API token from the Nestling app.\n");
 
-  const supabaseUrl = await ask("Supabase URL: ");
-  const supabaseAnonKey = await ask("Supabase Anon Key: ");
-  const refreshToken = await askHidden(
+  const refreshToken = await askHiddenLine(
     "API Token (from Nestling app → Settings → Data → API Token): ",
   );
-  const timezone = await ask("Timezone (e.g. Europe/London, leave blank for UTC): ");
-
-  iface.close();
+  const timezone = await askLine("Timezone (e.g. Europe/London, leave blank for UTC): ");
 
   // Verify credentials
-  const client = new Nestling({ supabaseUrl, supabaseAnonKey, refreshToken });
+  const client = new Nestling({ apiToken: refreshToken });
   try {
     await client.signIn();
     const user = await client.getUser();
@@ -180,9 +211,7 @@ async function cmdLogin(): Promise<void> {
     await client.close();
 
     saveConfig({
-      supabaseUrl,
-      supabaseAnonKey,
-      refreshToken,
+      apiToken: refreshToken,
       timezone: timezone || undefined,
     });
 
