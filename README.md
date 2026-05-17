@@ -1,6 +1,6 @@
 # nestling-ts
 
-TypeScript client and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from a TypeScript/Bun library or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
+TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript/Bun library, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
 
 > **Create-only writes.** The API can log new entries that sync to your app. It cannot update or delete existing entries — your data is always safe.
 
@@ -19,6 +19,60 @@ bun add nestling-ts
 ```
 
 Or run the MCP server with no install via `bunx` (see [MCP server](#mcp-server) below).
+
+## CLI
+
+### Quick start
+
+```bash
+bunx --package nestling-ts nestling login
+# or, inside a project where nestling-ts is installed:
+bun run nestling login
+# Supabase URL: https://your-project.supabase.co
+# Supabase Anon Key: eyJ...
+# API Token: (from Nestling app → Settings → Data → API Token)
+# Timezone: Europe/London
+# ✓ Authenticated as you@example.com! Found 1 child(ren).
+
+bunx --package nestling-ts nestling babies
+# • Eloise (id: abc-123)  8 months old
+```
+
+### Commands
+
+```bash
+# Sleep
+nestling sleep history --days 3
+nestling sleep log --start 2026-05-07T20:00:00Z --end 2026-05-08T06:30:00Z
+
+# Feed
+nestling feed history --days 2
+nestling feed log --at 2026-05-07T12:00:00Z --type Bottle --amount 180
+
+# Nappy
+nestling nappy history --days 2
+nestling nappy log --at 2026-05-07T14:00:00Z --type Wet
+
+# Diary
+nestling diary history --days 7
+nestling diary log --at 2026-05-07T15:00:00Z --text "First time clapping!" --tags milestone,funny
+
+# Multiple babies
+nestling --baby "Eloise" sleep history
+```
+
+All `history` commands support `--json` for machine-readable output. The `--baby` flag selects a specific child by name or ID (defaults to the first baby).
+
+### Authentication
+
+Configuration is stored at `~/.config/nestling/config.json`.
+
+- Interactive login: `nestling login`
+- Environment variables (take precedence over config file):
+  - `NESTLING_REFRESH_TOKEN`
+  - `NESTLING_SUPABASE_URL`
+  - `NESTLING_SUPABASE_ANON_KEY`
+  - `NESTLING_TIMEZONE` (optional)
 
 ## Library usage
 
@@ -88,7 +142,7 @@ The recommended setup uses `bunx` so there's nothing to install or keep up to da
   "mcpServers": {
     "nestling": {
       "command": "bunx",
-      "args": ["nestling-ts"],
+      "args": ["--package", "nestling-ts", "nestling-mcp"],
       "env": {
         "NESTLING_REFRESH_TOKEN": "your-token-from-nestling-app",
         "NESTLING_SUPABASE_URL": "https://your-project.supabase.co",

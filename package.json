@@ -1,13 +1,15 @@
 {
   "name": "nestling-ts",
   "version": "0.1.0",
-  "description": "TypeScript client and local MCP server for the Nestling baby tracking app",
+  "description": "TypeScript client, CLI, and local MCP server for the Nestling baby tracking app",
   "type": "module",
   "main": "src/index.ts",
   "bin": {
+    "nestling": "src/cli/cli.ts",
     "nestling-mcp": "src/mcp/server.ts"
   },
   "scripts": {
+    "cli": "bun run src/cli/cli.ts",
     "mcp": "bun run src/mcp/server.ts",
     "test": "bun test",
     "lint": "tsc --noEmit",
@@ -18,6 +20,7 @@
     "baby",
     "sleep",
     "tracking",
+    "cli",
     "mcp",
     "ai"
   ],
