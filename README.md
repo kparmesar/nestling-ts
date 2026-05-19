@@ -1,23 +1,39 @@
 # nestling-ts
 
-TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript/Bun library, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
+TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript library in Node or Bun, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
 
 > **Create-only writes.** The API can log new entries that sync to your app. It cannot update or delete existing entries — your data is always safe.
 
 ## Requirements
 
-- [Bun](https://bun.sh/) 1.3+ — the package ships TypeScript source with no build step, so it must be run on Bun (not Node).
+- [Node.js](https://nodejs.org/) 20+ or [Bun](https://bun.sh/) 1.3+
 - A [Nestling](https://www.nestling-app.com) account (Sign in with Google or Apple)
 - A Nestling API token (generate one from the app: **Settings → Data → API Token**)
 
 ## Install
 
-From a source checkout (not yet published to npm):
+Install the CLI globally:
 
 ```bash
-cd nestling-ts
-bun install
-bun link          # makes `nestling` available globally
+bun add -g nestling-ts
+# or
+npm install -g nestling-ts
+```
+
+Run without installing globally:
+
+```bash
+bunx --package nestling-ts nestling login
+# or
+npx --yes --package nestling-ts nestling login
+```
+
+Add the library to a project:
+
+```bash
+bun add nestling-ts
+# or
+npm install nestling-ts
 ```
 
 ## CLI
@@ -34,11 +50,14 @@ nestling babies
 # • Eloise (id: abc-123)  8 months old
 ```
 
-If you haven't run `bun link`, use the package script instead:
+If you are developing from a source checkout, use the local scripts instead:
 
 ```bash
-bun run --cwd /path/to/nestling-ts nestling -- login
-bun run --cwd /path/to/nestling-ts nestling -- babies
+npm run nestling -- login
+npm run nestling -- babies
+# or, without a build step during development:
+bun run dev:cli -- login
+bun run dev:cli -- babies
 ```
 
 ### Commands
@@ -134,15 +153,16 @@ await client.close();
 
 ### Claude Desktop / Claude Code config
 
-Point at the source checkout:
+Use the published package directly with npm or Bun:
+
+With npm:
 
 ```json
 {
   "mcpServers": {
     "nestling": {
-      "command": "bun",
-      "args": ["run", "nestling-mcp"],
-      "cwd": "/absolute/path/to/nestling-ts",
+      "command": "npx",
+      "args": ["--yes", "--package", "nestling-ts", "nestling-mcp"],
       "env": {
         "NESTLING_API_TOKEN": "your-token-from-nestling-app",
         "NESTLING_TIMEZONE": "Europe/London"
@@ -152,7 +172,24 @@ Point at the source checkout:
 }
 ```
 
-> **Note:** the command must be `bun`/`bunx` — not `node`/`npx`. The package is published as raw TypeScript, which Bun executes directly.
+With Bun:
+
+```json
+{
+  "mcpServers": {
+    "nestling": {
+      "command": "bunx",
+      "args": ["--package", "nestling-ts", "nestling-mcp"],
+      "env": {
+        "NESTLING_API_TOKEN": "your-token-from-nestling-app",
+        "NESTLING_TIMEZONE": "Europe/London"
+      }
+    }
+  }
+}
+```
+
+If you are developing from a source checkout instead, `npm run mcp` and `bun run dev:mcp` both work.
 
 ### Tools
 
@@ -245,12 +282,16 @@ The token is tied to your account. You can revoke it at any time by tapping **AP
 ## Development
 
 ```bash
-bun install
-bun link               # register `nestling` and `nestling-mcp` on your PATH
+npm install            # or: bun install
 bun test               # run the test suite
-bun run lint           # tsc --noEmit
-bun run nestling       # run the CLI (e.g. bun run nestling -- babies)
-bun run mcp            # start the MCP server locally
+npm run build          # compile to dist/
+npm run nestling -- babies
+npm run mcp            # start the MCP server locally
+
+# Bun-first development shortcuts
+bun test               # run the test suite
+bun run dev:cli -- babies
+bun run dev:mcp
 ```
 
 ## Voice assistants

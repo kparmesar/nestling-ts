@@ -58,7 +58,7 @@ export class Nestling {
   private static decodeApiToken(token: string): { email: string; password: string } {
     let decoded: string;
     try {
-      decoded = atob(token);
+      decoded = Buffer.from(token, "base64").toString("utf8");
     } catch {
       throw new AuthenticationError(
         "Invalid API token format. Generate a new one from the Nestling app (Settings → Data → API Token).",

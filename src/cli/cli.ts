@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { Nestling } from "../client.js";
 import type { FeedSide, FeedType, NappyType } from "../types.js";
 import { NestlingError } from "../types.js";
