@@ -1,4 +1,5 @@
 export { Nestling } from "./client.js";
+export { parseUserDateTime } from "./parseDateTime.js";
 export {
   type NestlingOptions,
   type Baby,

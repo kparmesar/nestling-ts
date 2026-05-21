@@ -1,7 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { Nestling } from "../client.js";
 import type { FeedSide, FeedType, NappyType } from "../types.js";
 import { NestlingError } from "../types.js";
+import { parseUserDateTime } from "../parseDateTime.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -167,6 +168,11 @@ function daysAgoRange(days: number): { start: Date; end: Date } {
   const end = new Date();
   const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
   return { start, end };
+}
+
+function resolveTime(input: string): string {
+  const tz = process.env.NESTLING_TIMEZONE ?? loadConfig()?.timezone;
+  return parseUserDateTime(input, tz ? { timezone: tz } : undefined);
 }
 
 function printJson(data: unknown): void {
@@ -356,7 +362,7 @@ async function cmdDiaryHistory(days: number, babyArg: string | undefined, json: 
 async function cmdSleepLog(start: string, end: string, babyArg: string | undefined, notes?: string): Promise<void> {
   const client = await getClient();
   const babyId = await resolveBabyId(client, babyArg);
-  const id = await client.sleep.create(babyId, { start, end, notes });
+  const id = await client.sleep.create(babyId, { start: resolveTime(start), end: resolveTime(end), notes });
   await client.close();
   console.log(`✓ Sleep logged (${id})`);
 }
@@ -374,7 +380,7 @@ async function cmdFeedLog(
     ? (normalizeChoice(opts.side, FEED_SIDES, "side") as FeedSide)
     : undefined;
   const id = await client.feed.create(babyId, {
-    timestamp,
+    timestamp: resolveTime(timestamp),
     type: feedType,
     amountMl: opts.amountMl,
     durationSeconds: opts.durationSeconds,
@@ -390,7 +396,7 @@ async function cmdNappyLog(timestamp: string, type: string, babyArg: string | un
   const babyId = await resolveBabyId(client, babyArg);
   const nappyType = normalizeChoice(type, NAPPY_TYPES, "type") as NappyType;
   const id = await client.nappies.create(babyId, {
-    timestamp,
+    timestamp: resolveTime(timestamp),
     type: nappyType,
     notes,
   });
@@ -406,7 +412,7 @@ async function cmdDiaryLog(
 ): Promise<void> {
   const client = await getClient();
   const babyId = await resolveBabyId(client, babyArg);
-  const id = await client.diary.create(babyId, { timestamp, text, tags });
+  const id = await client.diary.create(babyId, { timestamp: resolveTime(timestamp), text, tags });
   await client.close();
   console.log(`✓ Diary entry logged (${id})`);
 }
@@ -424,20 +430,27 @@ Setup:
   babies [--json]                  List babies on your account
 
 Sleep:
-  sleep log --start <ISO> --end <ISO> [--notes <text>]
+  sleep log --start <time> --end <time> [--notes <text>]
   sleep history [--days <n>] [--json]
 
 Feed:
-  feed log --at <ISO> --type <Breastfeeding|Bottle|Solids|Expressing> [--amount <ml>] [--duration <sec>] [--side <Left|Right|Both>] [--notes <text>]
+  feed log --at <time> --type <Breastfeeding|Bottle|Solids|Expressing> [--amount <ml>] [--duration <sec>] [--side <Left|Right|Both>] [--notes <text>]
   feed history [--days <n>] [--json]
 
 Nappy:
-  nappy log --at <ISO> --type <Wet|Dirty|Both> [--notes <text>]
+  nappy log --at <time> --type <Wet|Dirty|Both> [--notes <text>]
   nappy history [--days <n>] [--json]
 
 Diary:
-  diary log --at <ISO> --text <text> [--tags <tag1,tag2>]
+  diary log --at <time> --text <text> [--tags <tag1,tag2>]
   diary history [--days <n>] [--json]
+
+Time formats (all commands accept these):
+  ISO 8601:     2026-05-07T20:00:00Z
+  Date + time:  2026-05-07 8pm, 2026-05-07 20:00
+  Relative day: today 3pm, yesterday 8:30pm, tomorrow 7am
+  Time only:    3pm, 3:30pm, 15:30 (assumes today)
+  Relative:     now, 5 minutes ago, 2 hours ago, 30m ago
 
 Global options:
   --baby <name|id>                 Select a specific baby (defaults to first)

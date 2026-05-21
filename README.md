@@ -1,39 +1,23 @@
 # nestling-ts
 
-TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript library in Node or Bun, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
+TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript/Bun library, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
 
 > **Create-only writes.** The API can log new entries that sync to your app. It cannot update or delete existing entries — your data is always safe.
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) 20+ or [Bun](https://bun.sh/) 1.3+
+- [Bun](https://bun.sh/) 1.3+ — the package ships TypeScript source with no build step, so it must be run on Bun (not Node).
 - A [Nestling](https://www.nestling-app.com) account (Sign in with Google or Apple)
 - A Nestling API token (generate one from the app: **Settings → Data → API Token**)
 
 ## Install
 
-Install the CLI globally:
+From a source checkout (not yet published to npm):
 
 ```bash
-bun add -g nestling-ts
-# or
-npm install -g nestling-ts
-```
-
-Run without installing globally:
-
-```bash
-bunx --package nestling-ts nestling login
-# or
-npx --yes --package nestling-ts nestling login
-```
-
-Add the library to a project:
-
-```bash
-bun add nestling-ts
-# or
-npm install nestling-ts
+cd nestling-ts
+bun install
+bun link          # makes `nestling` available globally
 ```
 
 ## CLI
@@ -50,14 +34,11 @@ nestling babies
 # • Eloise (id: abc-123)  8 months old
 ```
 
-If you are developing from a source checkout, use the local scripts instead:
+If you haven't run `bun link`, use the package script instead:
 
 ```bash
-npm run nestling -- login
-npm run nestling -- babies
-# or, without a build step during development:
-bun run dev:cli -- login
-bun run dev:cli -- babies
+bun run --cwd /path/to/nestling-ts nestling -- login
+bun run --cwd /path/to/nestling-ts nestling -- babies
 ```
 
 ### Commands
@@ -65,25 +46,41 @@ bun run dev:cli -- babies
 ```bash
 # Sleep
 nestling sleep history --days 3
+nestling sleep log --start "yesterday 8pm" --end "today 6:30am"
 nestling sleep log --start 2026-05-07T20:00:00Z --end 2026-05-08T06:30:00Z
 
 # Feed
 nestling feed history --days 2
-nestling feed log --at 2026-05-07T12:00:00Z --type Bottle --amount 180
+nestling feed log --at "now" --type Bottle --amount 180
+nestling feed log --at "30m ago" --type Breastfeeding --side Left
 
 # Nappy
 nestling nappy history --days 2
-nestling nappy log --at 2026-05-07T14:00:00Z --type Wet
+nestling nappy log --at "5 minutes ago" --type Wet
 
 # Diary
 nestling diary history --days 7
-nestling diary log --at 2026-05-07T15:00:00Z --text "First time clapping!" --tags milestone,funny
+nestling diary log --at "today 3pm" --text "First time clapping!" --tags milestone,funny
 
 # Multiple babies
 nestling --baby "Eloise" sleep history
 ```
 
 All `history` commands support `--json` for machine-readable output. The `--baby` flag selects a specific child by name or ID (defaults to the first baby).
+
+### Time formats
+
+All time arguments accept flexible, human-friendly formats:
+
+| Format | Example |
+| --- | --- |
+| ISO 8601 | `2026-05-07T20:00:00Z` |
+| Date + time | `2026-05-07 8pm`, `2026-05-07 20:00` |
+| Relative day | `today 3pm`, `yesterday 8:30pm`, `tomorrow 7am` |
+| Time only (today) | `3pm`, `3:30pm`, `15:30` |
+| Relative | `now`, `5 minutes ago`, `2 hours ago`, `30m ago` |
+
+Times are resolved using your configured timezone (`NESTLING_TIMEZONE` env var or `timezone` in `~/.config/nestling/config.json`).
 
 ### Authentication
 
@@ -147,22 +144,32 @@ await client.diary.create(baby.id, {
 await client.close();
 ```
 
+### Cloud compatibility
+
+`nestling-ts` keeps API-facing names ergonomic while writing the iOS-compatible cloud model. For example, `amountMl` and `durationSeconds` are accepted by `client.feed.create()`, then stored in Supabase as feed payload keys `amount` and `duration`. Entry payloads are written as stringified JSON in `entries.data` to match the current iOS sync implementation.
+
+When adding new tools or direct Supabase writers, follow the root README's canonical entry wire format. In particular, use feed values `Breastfeeding`, `Bottle`, `Solids`, `Expressing`; nappy values `Wet`, `Dirty`, `Both`; and sleep `source` values `manual` or `timer`.
+
 ## MCP server
 
-`nestling-ts` ships a local MCP server as the `nestling-mcp` bin. It wraps the library as a set of MCP tools an AI agent can call.
+`nestling-ts` ships an MCP server as the `nestling-mcp` bin. It wraps the library as a set of MCP tools any AI agent can call — including Claude, ChatGPT, and other LLM interfaces that support MCP.
 
-### Claude Desktop / Claude Code config
+The server supports two transport modes:
 
-Use the published package directly with npm or Bun:
+- **stdio** (default) — for local use with Claude Desktop, Claude Code, Cursor, etc.
+- **HTTP** (`--http`) — remote Streamable HTTP transport for Claude.ai web projects, ChatGPT custom connectors, or any MCP-compatible client over the network.
 
-With npm:
+### Claude Desktop / Claude Code (stdio)
+
+Point at the source checkout:
 
 ```json
 {
   "mcpServers": {
     "nestling": {
-      "command": "npx",
-      "args": ["--yes", "--package", "nestling-ts", "nestling-mcp"],
+      "command": "bun",
+      "args": ["run", "nestling-mcp"],
+      "cwd": "/absolute/path/to/nestling-ts",
       "env": {
         "NESTLING_API_TOKEN": "your-token-from-nestling-app",
         "NESTLING_TIMEZONE": "Europe/London"
@@ -172,24 +179,50 @@ With npm:
 }
 ```
 
-With Bun:
+> **Note:** the command must be `bun`/`bunx` — not `node`/`npx`. The package is published as raw TypeScript, which Bun executes directly.
 
-```json
-{
-  "mcpServers": {
-    "nestling": {
-      "command": "bunx",
-      "args": ["--package", "nestling-ts", "nestling-mcp"],
-      "env": {
-        "NESTLING_API_TOKEN": "your-token-from-nestling-app",
-        "NESTLING_TIMEZONE": "Europe/London"
-      }
-    }
-  }
-}
+### Claude.ai web / remote MCP (HTTP mode)
+
+Run the MCP server in HTTP mode for remote access:
+
+```bash
+export NESTLING_API_TOKEN="your-token"
+export NESTLING_TIMEZONE="Europe/London"
+bun run nestling-mcp -- --http
+# Nestling MCP server (HTTP) listening on http://localhost:8787/mcp
 ```
 
-If you are developing from a source checkout instead, `npm run mcp` and `bun run dev:mcp` both work.
+Set a custom port with `PORT=3000 bun run nestling-mcp -- --http`.
+
+In Claude.ai, add a remote MCP server connection pointing to your endpoint (e.g. via a tunnel like ngrok, Cloudflare Tunnel, or a VPS):
+
+```
+URL: https://your-tunnel.ngrok.io/mcp
+```
+
+### ChatGPT custom connector
+
+ChatGPT supports MCP tool servers as custom connectors in GPT Builder. Run the HTTP server and expose it via a public URL, then add it as an "Action" in your custom GPT:
+
+1. Run `bun run nestling-mcp -- --http` on a server or use a tunnel.
+2. In ChatGPT GPT Builder → Actions → "Add action".
+3. Set the server URL to your public `/mcp` endpoint.
+4. ChatGPT will discover tools automatically via the MCP protocol.
+
+> **Tip:** For production use, put the HTTP server behind HTTPS (required by ChatGPT). Cloudflare Tunnel or ngrok provide this for free.
+
+### Deploy to a server
+
+```bash
+# Clone and install
+git clone https://github.com/ADevBelorth/nestling-ts.git
+cd nestling-ts && bun install
+
+# Run in HTTP mode
+NESTLING_API_TOKEN="..." NESTLING_TIMEZONE="Europe/London" PORT=8787 bun run nestling-mcp -- --http
+```
+
+For persistent deployments, use a process manager like `pm2` or a Docker container.
 
 ### Tools
 
@@ -282,16 +315,12 @@ The token is tied to your account. You can revoke it at any time by tapping **AP
 ## Development
 
 ```bash
-npm install            # or: bun install
+bun install
+bun link               # register `nestling` and `nestling-mcp` on your PATH
 bun test               # run the test suite
-npm run build          # compile to dist/
-npm run nestling -- babies
-npm run mcp            # start the MCP server locally
-
-# Bun-first development shortcuts
-bun test               # run the test suite
-bun run dev:cli -- babies
-bun run dev:mcp
+bun run lint           # tsc --noEmit
+bun run nestling       # run the CLI (e.g. bun run nestling -- babies)
+bun run mcp            # start the MCP server locally
 ```
 
 ## Voice assistants

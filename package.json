@@ -1,39 +1,20 @@
 {
   "name": "nestling-ts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TypeScript client, CLI, and local MCP server for the Nestling baby tracking app",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    },
-    "./package.json": "./package.json"
-  },
+  "main": "src/index.ts",
   "bin": {
-      "nestling": "dist/cli/cli.js",
-      "nestling-mcp": "dist/mcp/server.js"
+    "nestling": "src/cli/cli.ts",
+    "nestling-mcp": "src/mcp/server.ts"
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "cli": "npm run build --silent && node dist/cli/cli.js",
-    "nestling": "npm run build --silent && node dist/cli/cli.js",
-    "mcp": "npm run build --silent && node dist/mcp/server.js",
-    "dev:cli": "bun run src/cli/cli.ts",
-    "dev:mcp": "bun run src/mcp/server.ts",
+    "cli": "bun run src/cli/cli.ts",
+    "nestling": "bun run src/cli/cli.ts",
+    "mcp": "bun run src/mcp/server.ts",
     "test": "bun test",
-    "lint": "tsc --noEmit -p tsconfig.build.json",
-    "format": "prettier --write src/",
-    "prepack": "npm run build"
+    "lint": "tsc --noEmit",
+    "format": "prettier --write src/"
   },
   "keywords": [
     "nestling",
@@ -52,22 +33,6 @@
   },
   "devDependencies": {
     "@types/bun": "^1.2.14",
-    "@types/node": "^22.15.30",
     "typescript": "^5.8.3"
-  },
-  "engines": {
-    "node": ">=20.0.0",
-    "bun": ">=1.3.0"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/kparmesar/nestling-ts.git"
-  },
-  "homepage": "https://github.com/kparmesar/nestling-ts#readme",
-  "bugs": {
-    "url": "https://github.com/kparmesar/nestling-ts/issues"
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }
