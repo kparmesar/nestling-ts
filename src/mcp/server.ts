@@ -88,7 +88,7 @@ const DateRangeSchema = {
 
 const server = new McpServer({
   name: "nestling",
-  version: "0.2.0",
+  version: "0.2.1",
 });
 
 // get_capabilities

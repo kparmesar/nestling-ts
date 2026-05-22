@@ -58,7 +58,7 @@ export class Nestling {
   private static decodeApiToken(token: string): { email: string; password: string } {
     let decoded: string;
     try {
-      decoded = Buffer.from(token, "base64").toString("utf8");
+      decoded = atob(token);
     } catch {
       throw new AuthenticationError(
         "Invalid API token format. Generate a new one from the Nestling app (Settings → Data → API Token).",
@@ -157,6 +157,7 @@ class EntriesDomain<T> {
     protected client: Nestling,
     protected entryType: EntryType,
     private decode: (raw: RawEntry) => T,
+    private effectiveTimestamp: (raw: RawEntry, decoded: T) => string | null = (raw) => raw.timestamp,
   ) {}
 
   /** List entries for a baby within a date range */
@@ -176,7 +177,19 @@ class EntriesDomain<T> {
 
     const { data, error } = await query;
     if (error) throw new NestlingError(error.message, "api", true, "Retry the request.");
-    return (data ?? []).map((row) => this.decode(row as RawEntry));
+
+    return (data ?? [])
+      .map((row) => {
+        const raw = row as RawEntry;
+        const decoded = this.decode(raw);
+        return {
+          decoded,
+          effectiveTimestamp: this.effectiveTimestamp(raw, decoded),
+        };
+      })
+      .filter(({ effectiveTimestamp }) => isWithinDateRange(effectiveTimestamp, range))
+      .sort((left, right) => compareDateTimeStrings(left.effectiveTimestamp, right.effectiveTimestamp))
+      .map(({ decoded }) => decoded);
   }
 
   /** Insert a new entry row */
@@ -196,7 +209,7 @@ class EntriesDomain<T> {
         id: entryId,
         baby_id: babyId,
         type: this.entryType,
-        data,
+        data: JSON.stringify(data),
         start_at: bounds?.startAt ?? null,
         end_at: bounds?.endAt ?? null,
         timestamp,
@@ -211,7 +224,12 @@ class EntriesDomain<T> {
 
 class SleepDomain extends EntriesDomain<SleepEntry> {
   constructor(client: Nestling) {
-    super(client, "sleep", decodeSleep);
+    super(
+      client,
+      "sleep",
+      decodeSleep,
+      (raw, decoded) => decoded.start ?? raw.start_at,
+    );
   }
 
   /** Create a new sleep session */
@@ -234,7 +252,7 @@ class SleepDomain extends EntriesDomain<SleepEntry> {
         end: endAt,
         durationMinutes,
         type: "sleep",
-        source: "api",
+        source: "manual",
         isActive: false,
         notes: input.notes ?? null,
         updatedAt: now,
@@ -337,10 +355,10 @@ class DiaryDomain extends EntriesDomain<DiaryEntry> {
 // ── Decoders ──
 
 function decodeSleep(raw: RawEntry): SleepEntry {
-  const d = raw.data ?? {};
-  const start = (d.start as string) ?? raw.start_at;
-  const end = (d.end as string) ?? raw.end_at;
-  let durationMinutes = (d.durationMinutes as number) ?? null;
+  const d = entryData(raw.data);
+  const start = stringValue(d.start) ?? stringValue(d.startTime) ?? raw.start_at;
+  const end = stringValue(d.end) ?? stringValue(d.endTime) ?? raw.end_at;
+  let durationMinutes = numberValue(d.durationMinutes);
   if (durationMinutes === null && start && end) {
     durationMinutes = Math.round(
       (new Date(end).getTime() - new Date(start).getTime()) / 60000,
@@ -351,46 +369,82 @@ function decodeSleep(raw: RawEntry): SleepEntry {
     start: start ?? null,
     end: end ?? null,
     durationMinutes,
-    type: (d.type as string) ?? null,
-    source: (d.source as string) ?? null,
-    notes: (d.notes as string) ?? null,
+    type: stringValue(d.type),
+    source: stringValue(d.source),
+    notes: stringValue(d.notes),
   };
 }
 
 function decodeFeed(raw: RawEntry): FeedEntry {
-  const d = raw.data ?? {};
+  const d = entryData(raw.data);
   return {
     id: raw.id,
     timestamp: raw.timestamp,
-    type: (d.type as string) ?? null,
-    durationSeconds: (d.duration as number) ?? null,
-    amountMl: (d.amount as number) ?? null,
-    side: (d.side as string) ?? null,
-    notes: (d.notes as string) ?? null,
+    type: stringValue(d.type),
+    durationSeconds: numberValue(d.duration) ?? numberValue(d.durationSeconds),
+    amountMl: numberValue(d.amount) ?? numberValue(d.amountMl),
+    side: stringValue(d.side),
+    notes: stringValue(d.notes),
   };
 }
 
+function isWithinDateRange(value: string | null, range: DateRange): boolean {
+  if (!value) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed >= range.start && parsed <= range.end;
+}
+
+function compareDateTimeStrings(left: string | null, right: string | null): number {
+  const leftTime = left ? new Date(left).getTime() : Number.POSITIVE_INFINITY;
+  const rightTime = right ? new Date(right).getTime() : Number.POSITIVE_INFINITY;
+  return leftTime - rightTime;
+}
+
 function decodeNappy(raw: RawEntry): NappyEntry {
-  const d = raw.data ?? {};
+  const d = entryData(raw.data);
   return {
     id: raw.id,
     timestamp: raw.timestamp,
-    type: (d.type as string) ?? null,
-    notes: (d.notes as string) ?? null,
+    type: stringValue(d.type),
+    notes: stringValue(d.notes),
   };
 }
 
 function decodeDiary(raw: RawEntry): DiaryEntry {
-  const d = raw.data ?? {};
+  const d = entryData(raw.data);
   return {
     id: raw.id,
     timestamp: raw.timestamp,
-    text: (d.text as string) ?? null,
-    tags: (d.tags as string[]) ?? null,
+    text: stringValue(d.text),
+    tags: Array.isArray(d.tags) ? d.tags.filter((tag): tag is string => typeof tag === "string") : null,
   };
 }
 
 // ── Helpers ──
+
+function entryData(data: RawEntry["data"]): Record<string, unknown> {
+  if (!data) return {};
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return data;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 function mapBaby(row: Record<string, unknown>): Baby {
   return {
