@@ -1,6 +1,6 @@
 # nestling-ts
 
-TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript/Bun library, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for AI assistants.
+TypeScript client, CLI, and MCP server for the [Nestling baby tracking app](https://www.nestling-app.com). Read and log sleep, feed, nappy, and diary data from your Nestling account — from your terminal, a TypeScript/Bun library, or via a [Model Context Protocol](https://modelcontextprotocol.io) server for Claude, ChatGPT, and other AI assistants.
 
 > **Create-only writes.** The API can log new entries that sync to your app. It cannot update or delete existing entries — your data is always safe.
 
@@ -12,7 +12,17 @@ TypeScript client, CLI, and local MCP server for the [Nestling baby tracking app
 
 ## Install
 
-From a source checkout (not yet published to npm):
+From npm:
+
+```bash
+bun add -g nestling-ts
+# provides `nestling` and `nestling-mcp`
+
+# or add it to a project as a library
+bun add nestling-ts
+```
+
+From a source checkout:
 
 ```bash
 cd nestling-ts
@@ -157,7 +167,7 @@ When adding new tools or direct Supabase writers, follow the root README's canon
 The server supports two transport modes:
 
 - **stdio** (default) — for local use with Claude Desktop, Claude Code, Cursor, etc.
-- **HTTP** (`--http`) — remote Streamable HTTP transport for Claude.ai web projects, ChatGPT custom connectors, or any MCP-compatible client over the network.
+- **HTTP** (`--http`) — remote Streamable HTTP transport for Claude custom connectors, ChatGPT custom connectors, or any MCP-compatible client over the network.
 
 ### Claude Desktop / Claude Code (stdio)
 
@@ -181,7 +191,7 @@ Point at the source checkout:
 
 > **Note:** the command must be `bun`/`bunx` — not `node`/`npx`. The package is published as raw TypeScript, which Bun executes directly.
 
-### Claude.ai web / remote MCP (HTTP mode)
+### Claude custom connector (remote MCP / HTTP mode)
 
 Run the MCP server in HTTP mode for remote access:
 
@@ -194,11 +204,27 @@ bun run nestling-mcp -- --http
 
 Set a custom port with `PORT=3000 bun run nestling-mcp -- --http`.
 
-In Claude.ai, add a remote MCP server connection pointing to your endpoint (e.g. via a tunnel like ngrok, Cloudflare Tunnel, or a VPS):
+Expose that `/mcp` endpoint over public HTTPS, for example with Cloudflare Tunnel, ngrok, or a VPS + reverse proxy. Claude connects from Anthropic's cloud infrastructure, not from your local browser session, so `localhost`, VPN-only hosts, and private LAN addresses will not work.
+
+In Claude, add a custom connector pointing to your public MCP endpoint:
+
+- **Pro / Max**: `Customize → Connectors → Add custom connector`
+- **Team / Enterprise**: an owner adds it under `Organization settings → Connectors`, then each user connects it individually
+
+Use the exact `/mcp` URL, for example:
 
 ```
 URL: https://your-tunnel.ngrok.io/mcp
 ```
+
+Leave Claude's optional OAuth Client ID / Client Secret fields empty for the current `nestling-ts` deployment model. The server uses Claude's supported `none` authentication type: Claude can connect directly, and the Nestling account is determined by the `NESTLING_API_TOKEN` on the server.
+
+Important constraints for Claude custom connectors:
+
+- The endpoint must be reachable from Anthropic's published egress IP ranges.
+- Use HTTPS for any public deployment.
+- This remote mode is single-account and authless today. Anyone who can reach your `/mcp` URL can use the tools backed by that Nestling token. Run one dedicated endpoint per account and do not share the URL.
+- If you need multi-user access or organization-wide auth, you will need to add an OAuth-capable MCP auth layer in front of the server or extend the server to implement MCP OAuth.
 
 ### ChatGPT custom connector
 
@@ -222,7 +248,7 @@ cd nestling-ts && bun install
 NESTLING_API_TOKEN="..." NESTLING_TIMEZONE="Europe/London" PORT=8787 bun run nestling-mcp -- --http
 ```
 
-For persistent deployments, use a process manager like `pm2` or a Docker container.
+For persistent deployments, use a process manager like `pm2` or a Docker container. For Claude custom connectors, put the server behind public HTTPS and ensure Anthropic can reach it from its cloud IP ranges.
 
 ### Tools
 
@@ -269,7 +295,8 @@ Read tools return data; write tools create new entries (no update or delete).
 - **Create-only writes** — the API can add new entries but cannot update or delete existing ones.
 - **User-scoped** — authenticates as a regular Nestling user via Supabase Auth. Row Level Security ensures you can only access your own babies and data (plus any shared with you).
 - **No service keys** — uses the Supabase **anon** key, not a service role key. The anon key is safe to distribute; it only enables RLS-protected access.
-- **Local only** — the MCP server runs on your machine. Credentials never leave your device.
+- **Local or self-hosted remote** — in stdio mode, credentials stay on your machine. In HTTP mode, they live on the server process you deploy, not in Claude or ChatGPT.
+- **Authless remote mode** — the current remote MCP endpoint does not implement OAuth. Claude custom connectors can still use it with auth type `none`, but anyone who can reach the URL can use the connector.
 - **Short-lived sessions** — Supabase JWTs expire after 1 hour and are auto-refreshed. Your long-lived API token is only used to bootstrap the session.
 
 ## Getting your API token

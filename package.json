@@ -1,7 +1,7 @@
 {
   "name": "nestling-ts",
-  "version": "0.2.2",
-  "description": "TypeScript client, CLI, and local MCP server for the Nestling baby tracking app",
+  "version": "0.2.3",
+  "description": "TypeScript client, CLI, and MCP server for the Nestling baby tracking app",
   "type": "module",
   "main": "src/index.ts",
   "bin": {
