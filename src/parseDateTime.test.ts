@@ -138,4 +138,9 @@ describe("parseUserDateTime", () => {
   test("throws on garbage", () => {
     expect(() => parseUserDateTime("not a date")).toThrow("Could not parse");
   });
+
+  test("rejects oversized invalid date-like input", () => {
+    const input = `2026-05-07 ${"x".repeat(50_000)}`;
+    expect(() => parseUserDateTime(input)).toThrow("Cannot parse time");
+  });
 });

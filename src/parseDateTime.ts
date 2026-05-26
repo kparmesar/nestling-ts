@@ -19,14 +19,10 @@ const TIME_12H_PATTERN =
 const TIME_24H_PATTERN =
   /^(\d{1,2}):(\d{2})$/;
 
-const DATE_TIME_PATTERN =
-  /^(\d{4}-\d{2}-\d{2})\s+(.+)$/;
-
-const DAY_TIME_PATTERN =
-  /^(today|yesterday|tomorrow)\s+(.+)$/i;
-
 const ISO_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+const DAY_WORDS = new Set(["today", "yesterday", "tomorrow"]);
 
 export interface ParseDateTimeOptions {
   /** IANA timezone for resolving wall-clock times (e.g. "Europe/London"). Defaults to local system TZ. */
@@ -51,7 +47,7 @@ export function parseUserDateTime(
   if (ISO_PATTERN.test(trimmed)) {
     const d = new Date(trimmed);
     if (Number.isNaN(d.getTime())) {
-      throw new Error(`Invalid ISO date/time: ${trimmed}`);
+      throw new Error(`Invalid ISO date/time: ${describeInput(trimmed)}`);
     }
     return d.toISOString();
   }
@@ -76,20 +72,18 @@ export function parseUserDateTime(
   }
 
   // "today 3pm", "yesterday 8:30pm", "tomorrow 7am"
-  const dayTimeMatch = trimmed.match(DAY_TIME_PATTERN);
-  if (dayTimeMatch) {
-    const dayWord = dayTimeMatch[1].toLowerCase();
-    const timeStr = dayTimeMatch[2];
+  const dayTimeInput = splitDayAndTime(trimmed);
+  if (dayTimeInput) {
+    const { dayWord, timeStr } = dayTimeInput;
     const { hours, minutes } = parseTimeComponent(timeStr);
     const base = dayOffset(dayWord);
     return buildDateTime(base, hours, minutes, opts?.timezone);
   }
 
   // "2026-05-07 8pm", "2026-05-07 20:00"
-  const dateTimeMatch = trimmed.match(DATE_TIME_PATTERN);
-  if (dateTimeMatch) {
-    const dateStr = dateTimeMatch[1];
-    const timeStr = dateTimeMatch[2];
+  const dateTimeInput = splitDateAndTime(trimmed);
+  if (dateTimeInput) {
+    const { dateStr, timeStr } = dateTimeInput;
     const { hours, minutes } = parseTimeComponent(timeStr);
     const base = new Date(dateStr + "T00:00:00");
     if (Number.isNaN(base.getTime())) {
@@ -108,7 +102,7 @@ export function parseUserDateTime(
   }
 
   throw new Error(
-    `Could not parse date/time: "${trimmed}". ` +
+    `Could not parse date/time: ${describeInput(trimmed)}. ` +
       `Accepted formats: ISO 8601, "today 3pm", "yesterday 8:30pm", "3pm", "15:30", "2 hours ago", "now"`,
   );
 }
@@ -139,7 +133,105 @@ function parseTimeComponent(str: string): { hours: number; minutes: number } {
     return { hours, minutes };
   }
 
-  throw new Error(`Cannot parse time: "${str}"`);
+  throw new Error(`Cannot parse time: ${describeInput(str)}`);
+}
+
+function splitDayAndTime(
+  input: string,
+): { dayWord: string; timeStr: string } | null {
+  const parts = splitLeadingToken(input);
+  if (!parts) {
+    return null;
+  }
+
+  const dayWord = parts.token.toLowerCase();
+  if (!DAY_WORDS.has(dayWord)) {
+    return null;
+  }
+
+  return { dayWord, timeStr: parts.rest };
+}
+
+function splitDateAndTime(
+  input: string,
+): { dateStr: string; timeStr: string } | null {
+  if (!isIsoDatePrefix(input) || !isWhitespace(input[10])) {
+    return null;
+  }
+
+  let timeStart = 10;
+  while (timeStart < input.length && isWhitespace(input[timeStart])) {
+    timeStart += 1;
+  }
+
+  if (timeStart === input.length) {
+    return null;
+  }
+
+  return {
+    dateStr: input.slice(0, 10),
+    timeStr: input.slice(timeStart),
+  };
+}
+
+function splitLeadingToken(
+  input: string,
+): { token: string; rest: string } | null {
+  let tokenEnd = 0;
+  while (tokenEnd < input.length && !isWhitespace(input[tokenEnd])) {
+    tokenEnd += 1;
+  }
+
+  if (tokenEnd === 0 || tokenEnd === input.length) {
+    return null;
+  }
+
+  let restStart = tokenEnd;
+  while (restStart < input.length && isWhitespace(input[restStart])) {
+    restStart += 1;
+  }
+
+  if (restStart === input.length) {
+    return null;
+  }
+
+  return {
+    token: input.slice(0, tokenEnd),
+    rest: input.slice(restStart),
+  };
+}
+
+function isIsoDatePrefix(input: string): boolean {
+  return (
+    input.length >= 10 &&
+    isDigit(input[0]) &&
+    isDigit(input[1]) &&
+    isDigit(input[2]) &&
+    isDigit(input[3]) &&
+    input[4] === "-" &&
+    isDigit(input[5]) &&
+    isDigit(input[6]) &&
+    input[7] === "-" &&
+    isDigit(input[8]) &&
+    isDigit(input[9])
+  );
+}
+
+function isDigit(char: string | undefined): boolean {
+  return char !== undefined && char >= "0" && char <= "9";
+}
+
+function isWhitespace(char: string | undefined): boolean {
+  return char !== undefined && char.trim() === "";
+}
+
+function describeInput(value: string, maxLength = 80): string {
+  if (value.length <= maxLength) {
+    return `"${value}"`;
+  }
+
+  const visible = Math.max(1, maxLength - 3);
+  return `"${value.slice(0, visible)}..." (length ${value.length})`;
 }
 
 function dayOffset(word: string): Date {
