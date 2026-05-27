@@ -147,6 +147,7 @@ function requireClient(client: Nestling | null): Nestling {
 
 const DATETIME_DESC = 'Date/time — accepts ISO 8601 ("2026-05-07T20:00:00Z"), relative ("2 hours ago", "now"), day+time ("today 3pm", "yesterday 8:30pm"), time-only ("3pm"), or date+time ("2026-05-07 8pm")';
 const timezone = "UTC"; // Worker doesn't know user TZ; tools accept ISO or relative
+const HOSTED_ICON_SOURCE_URL = "https://nestling-app.com/favicon-512.png";
 
 const BabyIdSchema = z.string().uuid().describe("The baby's UUID");
 const FlexDateTimeSchema = z.string().transform((val) => parseUserDateTime(val, { timezone }));
@@ -185,14 +186,14 @@ const MutationOutputSchema = {
 
 // ── Server factory ──
 
-function createServer(client: Nestling | null): McpServer {
+function createServer(client: Nestling | null, issuer: string): McpServer {
   const server = new McpServer({
     name: "nestling",
     title: "Nestling",
     version: "0.2.4",
     description: "Read and log your baby's sleep, feeds, nappies, and diary entries from the Nestling baby tracking app.",
     websiteUrl: "https://nestling-app.com",
-    icons: [{ src: "https://nestling-app.com/favicon-512.png", mimeType: "image/png" }],
+    icons: [{ src: `${issuer}/icon.png`, mimeType: "image/png" }],
   });
 
   // ── Discovery ──
@@ -375,6 +376,25 @@ export default {
     // Health check
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({ status: "ok" }), { headers: { "Content-Type": "application/json" } });
+    }
+
+    // Same-host icon endpoint for server metadata discovery
+    if (url.pathname === "/icon.png") {
+      const upstream = await fetch(HOSTED_ICON_SOURCE_URL, {
+        headers: { Accept: "image/png,image/*;q=0.8,*/*;q=0.5" },
+      });
+
+      if (!upstream.ok || !upstream.body) {
+        return new Response("Icon unavailable", { status: 502 });
+      }
+
+      return new Response(upstream.body, {
+        headers: {
+          "Content-Type": upstream.headers.get("content-type") ?? "image/png",
+          "Cache-Control": "public, max-age=86400",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
     }
 
     // ── OAuth 2.0 endpoints ──
@@ -560,7 +580,7 @@ export default {
         try { client = await getOrCreateClient(token); } catch { /* ignore — discovery works without auth */ }
       }
 
-      const mcpServer = createServer(client);
+      const mcpServer = createServer(client, issuer);
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless — no session tracking
       });
