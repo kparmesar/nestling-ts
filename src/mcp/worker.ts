@@ -223,6 +223,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const issuer = `${url.protocol}//${url.host}`;
+    const resourceMetadataUrl = `${issuer}/.well-known/oauth-protected-resource/mcp`;
 
     const corsHeaders: Record<string, string> = {
       "Access-Control-Allow-Origin": "*",
@@ -388,7 +389,13 @@ export default {
       if (!token) {
         return new Response(
           JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>", hint: "Get your API token from the Nestling app: Settings → Data → API Token" }),
-          { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" } },
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              "WWW-Authenticate": `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`,
+            },
+          },
         );
       }
 
@@ -398,7 +405,13 @@ export default {
       } catch {
         return new Response(
           JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
-          { status: 401, headers: { "Content-Type": "application/json" } },
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              "WWW-Authenticate": `Bearer error="invalid_token", error_description="Authentication failed", resource_metadata="${resourceMetadataUrl}"`,
+            },
+          },
         );
       }
 
