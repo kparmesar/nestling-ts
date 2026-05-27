@@ -147,7 +147,14 @@ const DateRangeSchema = { start: FlexDateTimeSchema.describe(`Start: ${DATETIME_
 // ── Server factory ──
 
 function createServer(client: Nestling): McpServer {
-  const server = new McpServer({ name: "nestling", version: "0.2.3" });
+  const server = new McpServer({
+    name: "nestling",
+    title: "Nestling",
+    version: "0.2.4",
+    description: "Read and log your baby's sleep, feeds, nappies, and diary entries from the Nestling baby tracking app.",
+    websiteUrl: "https://nestling-app.com",
+    icons: [{ src: "https://nestling-app.com/favicon-512.png", mimeType: "image/png" }],
+  });
 
   server.tool("get_capabilities", "Discovery: list available data sources and tools", {}, async () => {
     return ok({ tools: ["get_capabilities","get_user","list_babies","get_baby","list_sleep","list_feeds","list_nappies","list_diary","create_sleep","create_feed","create_nappy","create_diary"], dataSources: ["babies","sleep","feeds","nappies","diary"], timezone, readOnly: false });
