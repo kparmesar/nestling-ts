@@ -195,17 +195,12 @@ Point at the source checkout:
 
 **Hosted (simplest — no setup required):**
 
-If a hosted Nestling MCP endpoint is available (e.g. `https://mcp.nestling-app.com/mcp`), just add it as a connector in Claude:
-
-1. Get your API token: open Nestling → **Settings → Data → API Token** → Copy.
-2. In Claude, go to **Customize → Connectors → Add custom connector** (Pro/Max) or ask an org owner to add it (Team/Enterprise).
-3. Set:
-   - **URL:** `https://mcp.nestling-app.com/mcp`
-   - **Auth type:** Bearer Token
-   - **Token:** paste your Nestling API token
+1. In Claude, go to **Customize → Connectors → Add custom connector** (Pro/Max) or ask an org owner to add it (Team/Enterprise).
+2. Set **URL** to `https://mcp.nestling-app.com/mcp` and click **Add**.
+3. Claude opens a sign-in page — paste your API token from Nestling → **Settings → Data → API Token**.
 4. Done. Claude can now read and log your baby's data.
 
-No ngrok, no ports, no self-hosting. Each user authenticates with their own token.
+No ngrok, no ports, no self-hosting. Each user authenticates with their own token via OAuth.
 
 **Self-hosted:**
 
