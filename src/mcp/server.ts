@@ -11,16 +11,12 @@ import { parseUserDateTime } from "../parseDateTime.js";
 const NESTLING_API_TOKEN = process.env.NESTLING_API_TOKEN;
 const NESTLING_TIMEZONE = process.env.NESTLING_TIMEZONE ?? "UTC";
 
-if (!NESTLING_API_TOKEN) {
+const isHttpMode = process.argv.includes("--http");
+
+if (!isHttpMode && !NESTLING_API_TOKEN) {
   console.error("Missing required env var: NESTLING_API_TOKEN");
   process.exit(1);
 }
-
-// ── Client ──
-
-const client = new Nestling({
-  apiToken: NESTLING_API_TOKEN,
-});
 
 // ── Helpers ──
 
@@ -84,15 +80,16 @@ const DateRangeSchema = {
   end: FlexDateTimeSchema.describe(`End: ${DATETIME_DESC}`),
 };
 
-// ── Server ──
+// ── Server factory ──
 
-const server = new McpServer({
-  name: "nestling",
-  version: "0.2.3",
-});
+function createServer(client: Nestling): McpServer {
+  const server = new McpServer({
+    name: "nestling",
+    version: "0.2.3",
+  });
 
-// get_capabilities
-server.tool(
+  // get_capabilities
+  server.tool(
   "get_capabilities",
   "Discovery: list available data sources and tools",
   {},
@@ -337,12 +334,13 @@ server.tool(
   },
 );
 
+  return server;
+}
+
 // ── Start ──
 
 async function main() {
-  await client.signIn();
-
-  const mode = process.argv.includes("--http") ? "http" : "stdio";
+  const mode = isHttpMode ? "http" : "stdio";
 
   if (mode === "http") {
     const { WebStandardStreamableHTTPServerTransport } = await import(
@@ -351,8 +349,29 @@ async function main() {
 
     const port = parseInt(process.env.PORT ?? "8787", 10);
 
-    // Track active transports by session
-    const sessions = new Map<string, InstanceType<typeof WebStandardStreamableHTTPServerTransport>>();
+    // Per-session state: each session has its own McpServer + Nestling client
+    const sessions = new Map<string, {
+      transport: InstanceType<typeof WebStandardStreamableHTTPServerTransport>;
+      server: McpServer;
+    }>();
+
+    // Client cache: reuse authenticated clients across sessions for the same token
+    const clientCache = new Map<string, Nestling>();
+
+    async function getOrCreateClient(token: string): Promise<Nestling> {
+      if (clientCache.has(token)) return clientCache.get(token)!;
+      const c = new Nestling({ apiToken: token });
+      await c.signIn();
+      clientCache.set(token, c);
+      return c;
+    }
+
+    function extractBearerToken(req: Request): string | null {
+      const auth = req.headers.get("authorization");
+      if (!auth) return null;
+      const match = auth.match(/^Bearer\s+(.+)$/i);
+      return match?.[1] ?? null;
+    }
 
     Bun.serve({
       port,
@@ -372,25 +391,44 @@ async function main() {
           const sessionId = req.headers.get("mcp-session-id");
 
           if (sessionId && sessions.has(sessionId)) {
-            const transport = sessions.get(sessionId)!;
+            const { transport } = sessions.get(sessionId)!;
             return transport.handleRequest(req);
           }
 
-          // New session (or no session header)
+          // New session — requires Bearer token
           if (req.method === "POST" && !sessionId) {
+            const token = extractBearerToken(req) ?? NESTLING_API_TOKEN;
+            if (!token) {
+              return new Response(
+                JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>" }),
+                { status: 401, headers: { "Content-Type": "application/json" } },
+              );
+            }
+
+            let client: Nestling;
+            try {
+              client = await getOrCreateClient(token);
+            } catch (e) {
+              return new Response(
+                JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
+                { status: 401, headers: { "Content-Type": "application/json" } },
+              );
+            }
+
+            const mcpServer = createServer(client);
             const transport = new WebStandardStreamableHTTPServerTransport({
               sessionIdGenerator: () => crypto.randomUUID(),
               onsessioninitialized: (id) => {
-                sessions.set(id, transport);
+                sessions.set(id, { transport, server: mcpServer });
               },
             });
 
             transport.onclose = () => {
-              const id = [...sessions.entries()].find(([, t]) => t === transport)?.[0];
+              const id = [...sessions.entries()].find(([, s]) => s.transport === transport)?.[0];
               if (id) sessions.delete(id);
             };
 
-            await server.connect(transport);
+            await mcpServer.connect(transport);
             return transport.handleRequest(req);
           }
 
@@ -402,7 +440,12 @@ async function main() {
     });
 
     console.error(`Nestling MCP server (HTTP) listening on http://localhost:${port}/mcp`);
+    console.error(`Auth: Bearer token (Nestling API token) ${NESTLING_API_TOKEN ? "or env fallback" : "required"}`);
   } else {
+    // stdio mode — single client from env
+    const client = new Nestling({ apiToken: NESTLING_API_TOKEN! });
+    await client.signIn();
+    const server = createServer(client);
     const transport = new StdioServerTransport();
     await server.connect(transport);
   }

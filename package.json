@@ -12,6 +12,8 @@
     "cli": "bun run src/cli/cli.ts",
     "nestling": "bun run src/cli/cli.ts",
     "mcp": "bun run src/mcp/server.ts",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
     "test": "bun test",
     "lint": "tsc --noEmit",
     "format": "prettier --write src/"
@@ -33,6 +35,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.2.14",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "wrangler": "^4.95.0"
   }
 }
