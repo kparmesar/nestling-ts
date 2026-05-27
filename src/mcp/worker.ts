@@ -78,32 +78,50 @@ function authorizeHTML(params: { client_id: string; redirect_uri: string; state?
   const hidden = Object.entries(params).map(([k, v]) => v != null ? `<input type="hidden" name="${k}" value="${v}">` : "").join("\n");
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in to Nestling</title>
+<title>Sign in — Nestling</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=Inter:wght@400;500;600&display=swap">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8f5f0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem}
-.card{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:420px;width:100%;padding:2.5rem}
-h1{font-size:1.5rem;text-align:center;margin-bottom:.5rem}
-p{color:#666;text-align:center;margin-bottom:1.5rem;font-size:.9rem}
-label{display:block;font-weight:600;margin-bottom:.5rem;font-size:.9rem}
-input[type=password]{width:100%;padding:.75rem 1rem;border:1.5px solid #ddd;border-radius:10px;font-size:1rem;margin-bottom:1.5rem}
-input[type=password]:focus{outline:none;border-color:#7c6dd8}
-button{width:100%;padding:.85rem;background:#7c6dd8;color:#fff;border:none;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer}
-button:hover{background:#6b5cc5}
-.hint{color:#999;font-size:.8rem;text-align:center;margin-top:1rem}
-.logo{text-align:center;margin-bottom:1rem;font-size:2rem}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:#fdfbf7;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;color:#1c1917;line-height:1.6}
+.card{background:#fff;border-radius:1rem;box-shadow:0 20px 25px -5px rgba(0,0,0,.08),0 10px 10px -5px rgba(0,0,0,.02);max-width:420px;width:100%;padding:2.5rem}
+.logo{display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:1.5rem}
+.logo img{width:36px;height:36px;border-radius:8px}
+.logo span{font-family:'Lora',Georgia,serif;font-size:1.375rem;font-weight:600;letter-spacing:-.01em}
+h1{font-family:'Lora',Georgia,serif;font-size:1.5rem;font-weight:600;text-align:center;margin-bottom:.375rem;letter-spacing:-.01em}
+.subtitle{color:#57534e;text-align:center;margin-bottom:1.75rem;font-size:.9rem}
+label{display:block;font-weight:600;margin-bottom:.375rem;font-size:.875rem}
+input[type=password]{width:100%;padding:.75rem 1rem;border:1px solid rgba(212,184,149,.24);border-radius:.5rem;font-size:1rem;font-family:inherit;background:#fdfbf7;transition:border-color .2s}
+input[type=password]:focus{outline:none;border-color:#c19a6b;box-shadow:0 0 0 3px rgba(193,154,107,.15)}
+input[type=password]::placeholder{color:#a8a29e}
+.btn{display:block;width:100%;padding:.875rem;background:linear-gradient(135deg,#c19a6b 0%,#a67c52 100%);color:#fff;border:none;border-radius:.5rem;font-size:.9375rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;margin-top:1.25rem;transition:all .2s cubic-bezier(.4,0,.2,1);box-shadow:0 4px 12px rgba(193,154,107,.25)}
+.btn:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(193,154,107,.35)}
+.btn:active{transform:translateY(0)}
+.hint{color:#78716c;font-size:.8rem;text-align:center;margin-top:1.25rem;line-height:1.5}
+.hint b{color:#57534e;font-weight:600}
+.error{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:.5rem;padding:.75rem 1rem;text-align:center;font-size:.875rem;margin-bottom:1rem}
+.divider{height:1px;background:rgba(212,184,149,.12);margin:1.5rem 0}
+.footer{text-align:center;font-size:.75rem;color:#a8a29e}
+.footer a{color:#c19a6b;text-decoration:none}
+.footer a:hover{text-decoration:underline}
 </style></head><body>
 <div class="card">
-<div class="logo">🐣</div>
-<h1>Sign in to Nestling</h1>
-<p>Enter your API token to connect your Nestling account.</p>
+<div class="logo">
+<img src="https://nestling-app.com/logo.png" alt="Nestling" width="36" height="36">
+<span>Nestling</span>
+</div>
+<h1>Connect your account</h1>
+<p class="subtitle">Paste your API token to give this app access to your baby's data.</p>
 <form method="POST" action="/oauth/authorize">
 ${hidden}
 <label for="token">API Token</label>
-<input type="password" id="token" name="token" placeholder="Paste your token" required autocomplete="off">
-<button type="submit">Connect</button>
+<input type="password" id="token" name="token" placeholder="Paste your Nestling API token" required autocomplete="off">
+<button class="btn" type="submit">Connect</button>
 </form>
-<p class="hint">Find your token in the Nestling app:<br><b>Settings → Data → API Token</b></p>
+<p class="hint">Open the Nestling app → <b>Settings → Data → API Token</b></p>
+<div class="divider"></div>
+<p class="footer">By connecting you agree to the <a href="https://nestling-app.com/privacy.html">Privacy Policy</a></p>
 </div></body></html>`;
 }
 
@@ -291,10 +309,11 @@ export default {
         } catch {
           // Show form again with error
           const params = { client_id: clientId, redirect_uri: redirectUri, state: state ?? undefined, code_challenge: codeChallenge, code_challenge_method: "S256" };
-          return new Response(
-            authorizeHTML(params).replace("</form>", '<p style="color:#d33;margin-bottom:1rem;text-align:center">Invalid API token. Please try again.</p></form>'),
-            { headers: { "Content-Type": "text/html;charset=utf-8" } },
+          const html = authorizeHTML(params).replace(
+            '<label for="token">',
+            '<div class="error">Invalid API token. Please check and try again.</div>\n<label for="token">',
           );
+          return new Response(html, { headers: { "Content-Type": "text/html;charset=utf-8" } });
         }
 
         // Create encrypted auth code
