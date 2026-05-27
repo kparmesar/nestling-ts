@@ -123,17 +123,26 @@ ${hidden}
 // ── MCP tool helpers ──
 
 function ok(data: unknown, totalResults?: number) {
+  const structured = { data, totalResults: totalResults ?? (Array.isArray(data) ? data.length : 1) };
   return {
-    content: [{ type: "text" as const, text: JSON.stringify({ data, totalResults: totalResults ?? (Array.isArray(data) ? data.length : 1) }, null, 2) }],
+    structuredContent: structured,
+    content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
   };
 }
 
 function fail(err: unknown) {
   const isNestling = err instanceof NestlingError;
+  const structured = { error: isNestling ? err.name : "Error", message: err instanceof Error ? err.message : String(err), category: isNestling ? err.category : "unknown", retryable: isNestling ? err.retryable : false, recovery: isNestling ? err.recovery : "Check your configuration and try again." };
   return {
-    content: [{ type: "text" as const, text: JSON.stringify({ error: isNestling ? err.name : "Error", message: err instanceof Error ? err.message : String(err), category: isNestling ? err.category : "unknown", retryable: isNestling ? err.retryable : false, recovery: isNestling ? err.recovery : "Check your configuration and try again." }, null, 2) }],
+    structuredContent: structured,
+    content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
     isError: true,
   };
+}
+
+function requireClient(client: Nestling | null): Nestling {
+  if (!client) throw new Error("Authentication required — provide a Bearer token to call tools.");
+  return client;
 }
 
 const DATETIME_DESC = 'Date/time — accepts ISO 8601 ("2026-05-07T20:00:00Z"), relative ("2 hours ago", "now"), day+time ("today 3pm", "yesterday 8:30pm"), time-only ("3pm"), or date+time ("2026-05-07 8pm")';
@@ -144,9 +153,39 @@ const FlexDateTimeSchema = z.string().transform((val) => parseUserDateTime(val, 
 const NonNegativeNumberSchema = z.number().finite().nonnegative();
 const DateRangeSchema = { start: FlexDateTimeSchema.describe(`Start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`End: ${DATETIME_DESC}`) };
 
+// ── Shared annotations ──
+
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
+
+// ── Shared output schemas ──
+
+const ErrorOutputSchema = {
+  error: z.string(),
+  message: z.string(),
+  category: z.string(),
+  retryable: z.boolean(),
+  recovery: z.string(),
+};
+
+const ListOutputSchema = {
+  data: z.array(z.record(z.string(), z.unknown())).describe("Array of records"),
+  totalResults: z.number().int().nonnegative(),
+};
+
+const RecordOutputSchema = {
+  data: z.record(z.string(), z.unknown()).describe("Single record"),
+  totalResults: z.number().int().nonnegative(),
+};
+
+const MutationOutputSchema = {
+  data: z.object({ id: z.string(), message: z.string() }),
+  totalResults: z.number().int().nonnegative(),
+};
+
 // ── Server factory ──
 
-function createServer(client: Nestling): McpServer {
+function createServer(client: Nestling | null): McpServer {
   const server = new McpServer({
     name: "nestling",
     title: "Nestling",
@@ -156,55 +195,144 @@ function createServer(client: Nestling): McpServer {
     icons: [{ src: "https://nestling-app.com/favicon-512.png", mimeType: "image/png" }],
   });
 
-  server.tool("get_capabilities", "Discovery: list available data sources and tools", {}, async () => {
+  // ── Discovery ──
+
+  server.registerTool("get_capabilities", {
+    title: "Get Capabilities",
+    description: "Discovery: list available data sources and tools",
+    annotations: READ_ONLY,
+    outputSchema: RecordOutputSchema,
+  }, async () => {
     return ok({ tools: ["get_capabilities","get_user","list_babies","get_baby","list_sleep","list_feeds","list_nappies","list_diary","create_sleep","create_feed","create_nappy","create_diary"], dataSources: ["babies","sleep","feeds","nappies","diary"], timezone, readOnly: false });
   });
 
-  server.tool("get_user", "Get the authenticated user's profile (email, ID)", {}, async () => {
-    try { return ok(await client.getUser()); } catch (e) { return fail(e); }
+  // ── Read-only tools ──
+
+  server.registerTool("get_user", {
+    title: "Get User",
+    description: "Get the authenticated user's profile (email, ID)",
+    annotations: READ_ONLY,
+    outputSchema: RecordOutputSchema,
+  }, async () => {
+    try { return ok(await requireClient(client).getUser()); } catch (e) { return fail(e); }
   });
 
-  server.tool("list_babies", "List all babies the user has access to (owned + shared)", {}, async () => {
-    try { return ok(await client.babies.list()); } catch (e) { return fail(e); }
+  server.registerTool("list_babies", {
+    title: "List Babies",
+    description: "List all babies the user has access to (owned + shared)",
+    annotations: READ_ONLY,
+    outputSchema: ListOutputSchema,
+  }, async () => {
+    try { return ok(await requireClient(client).babies.list()); } catch (e) { return fail(e); }
   });
 
-  server.tool("get_baby", "Get details for a specific baby by ID", { babyId: BabyIdSchema }, async ({ babyId }) => {
-    try { return ok(await client.babies.get(babyId)); } catch (e) { return fail(e); }
+  server.registerTool("get_baby", {
+    title: "Get Baby",
+    description: "Get details for a specific baby by ID",
+    inputSchema: { babyId: BabyIdSchema },
+    annotations: READ_ONLY,
+    outputSchema: RecordOutputSchema,
+  }, async ({ babyId }) => {
+    try { return ok(await requireClient(client).babies.get(babyId)); } catch (e) { return fail(e); }
   });
 
-  server.tool("list_sleep", "List sleep sessions for a baby within a date range", { babyId: BabyIdSchema, ...DateRangeSchema }, async ({ babyId, start, end }) => {
-    try { return ok(await client.sleep.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
+  server.registerTool("list_sleep", {
+    title: "List Sleep Sessions",
+    description: "List sleep sessions for a baby within a date range",
+    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
+    annotations: READ_ONLY,
+    outputSchema: ListOutputSchema,
+  }, async ({ babyId, start, end }) => {
+    try { return ok(await requireClient(client).sleep.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
   });
 
-  server.tool("list_feeds", "List feeding entries (breast, bottle, solids) for a baby within a date range", { babyId: BabyIdSchema, ...DateRangeSchema }, async ({ babyId, start, end }) => {
-    try { return ok(await client.feed.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
+  server.registerTool("list_feeds", {
+    title: "List Feeds",
+    description: "List feeding entries (breast, bottle, solids) for a baby within a date range",
+    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
+    annotations: READ_ONLY,
+    outputSchema: ListOutputSchema,
+  }, async ({ babyId, start, end }) => {
+    try { return ok(await requireClient(client).feed.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
   });
 
-  server.tool("list_nappies", "List nappy/diaper entries for a baby within a date range", { babyId: BabyIdSchema, ...DateRangeSchema }, async ({ babyId, start, end }) => {
-    try { return ok(await client.nappies.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
+  server.registerTool("list_nappies", {
+    title: "List Nappies",
+    description: "List nappy/diaper entries for a baby within a date range",
+    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
+    annotations: READ_ONLY,
+    outputSchema: ListOutputSchema,
+  }, async ({ babyId, start, end }) => {
+    try { return ok(await requireClient(client).nappies.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
   });
 
-  server.tool("list_diary", "List diary/journal entries for a baby within a date range", { babyId: BabyIdSchema, ...DateRangeSchema }, async ({ babyId, start, end }) => {
-    try { return ok(await client.diary.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
+  server.registerTool("list_diary", {
+    title: "List Diary Entries",
+    description: "List diary/journal entries for a baby within a date range",
+    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
+    annotations: READ_ONLY,
+    outputSchema: ListOutputSchema,
+  }, async ({ babyId, start, end }) => {
+    try { return ok(await requireClient(client).diary.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
   });
 
-  server.tool("create_sleep", "Log a sleep session for a baby. Accepts flexible time formats.", { babyId: BabyIdSchema, start: FlexDateTimeSchema.describe(`Sleep start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`Sleep end: ${DATETIME_DESC}`), notes: z.string().optional().describe("Optional notes") }, async ({ babyId, start, end, notes }) => {
-    try { const id = await client.sleep.create(babyId, { start, end, notes }); return ok({ id, message: "Sleep session created" }); } catch (e) { return fail(e); }
+  // ── Write tools ──
+
+  server.registerTool("create_sleep", {
+    title: "Log Sleep",
+    description: "Log a sleep session for a baby. Accepts flexible time formats.",
+    inputSchema: { babyId: BabyIdSchema, start: FlexDateTimeSchema.describe(`Sleep start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`Sleep end: ${DATETIME_DESC}`), notes: z.string().optional().describe("Optional notes") },
+    annotations: WRITE,
+    outputSchema: MutationOutputSchema,
+  }, async ({ babyId, start, end, notes }) => {
+    try { const c = requireClient(client); const id = await c.sleep.create(babyId, { start, end, notes }); return ok({ id, message: "Sleep session created" }); } catch (e) { return fail(e); }
   });
 
-  server.tool("create_feed", "Log a feeding entry for a baby. Accepts flexible time formats.", { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the feed happened: ${DATETIME_DESC}`), type: z.enum(["Breastfeeding","Bottle","Solids","Expressing"]).describe("Feed type"), durationSeconds: NonNegativeNumberSchema.optional().describe("Duration in seconds"), amountMl: NonNegativeNumberSchema.optional().describe("Amount in millilitres"), side: z.enum(["Left","Right","Both"]).optional().describe("Which side (for breastfeeding)"), notes: z.string().optional().describe("Optional notes") }, async ({ babyId, timestamp, type, durationSeconds, amountMl, side, notes }) => {
-    try { const id = await client.feed.create(babyId, { timestamp, type, durationSeconds, amountMl, side, notes }); return ok({ id, message: "Feed entry created" }); } catch (e) { return fail(e); }
+  server.registerTool("create_feed", {
+    title: "Log Feed",
+    description: "Log a feeding entry for a baby. Accepts flexible time formats.",
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the feed happened: ${DATETIME_DESC}`), type: z.enum(["Breastfeeding","Bottle","Solids","Expressing"]).describe("Feed type"), durationSeconds: NonNegativeNumberSchema.optional().describe("Duration in seconds"), amountMl: NonNegativeNumberSchema.optional().describe("Amount in millilitres"), side: z.enum(["Left","Right","Both"]).optional().describe("Which side (for breastfeeding)"), notes: z.string().optional().describe("Optional notes") },
+    annotations: WRITE,
+    outputSchema: MutationOutputSchema,
+  }, async ({ babyId, timestamp, type, durationSeconds, amountMl, side, notes }) => {
+    try { const c = requireClient(client); const id = await c.feed.create(babyId, { timestamp, type, durationSeconds, amountMl, side, notes }); return ok({ id, message: "Feed entry created" }); } catch (e) { return fail(e); }
   });
 
-  server.tool("create_nappy", "Log a nappy/diaper change for a baby. Accepts flexible time formats.", { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the nappy change happened: ${DATETIME_DESC}`), type: z.enum(["Wet","Dirty","Both"]).describe("Nappy type"), notes: z.string().optional().describe("Optional notes") }, async ({ babyId, timestamp, type, notes }) => {
-    try { const id = await client.nappies.create(babyId, { timestamp, type, notes }); return ok({ id, message: "Nappy entry created" }); } catch (e) { return fail(e); }
+  server.registerTool("create_nappy", {
+    title: "Log Nappy Change",
+    description: "Log a nappy/diaper change for a baby. Accepts flexible time formats.",
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the nappy change happened: ${DATETIME_DESC}`), type: z.enum(["Wet","Dirty","Both"]).describe("Nappy type"), notes: z.string().optional().describe("Optional notes") },
+    annotations: WRITE,
+    outputSchema: MutationOutputSchema,
+  }, async ({ babyId, timestamp, type, notes }) => {
+    try { const c = requireClient(client); const id = await c.nappies.create(babyId, { timestamp, type, notes }); return ok({ id, message: "Nappy entry created" }); } catch (e) { return fail(e); }
   });
 
-  server.tool("create_diary", "Log a diary/journal entry for a baby. Accepts flexible time formats.", { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the event happened: ${DATETIME_DESC}`), text: z.string().describe("The diary entry text"), tags: z.array(z.string()).optional().describe("Optional tags (e.g. ['milestone', 'funny'])") }, async ({ babyId, timestamp, text, tags }) => {
-    try { const id = await client.diary.create(babyId, { timestamp, text, tags }); return ok({ id, message: "Diary entry created" }); } catch (e) { return fail(e); }
+  server.registerTool("create_diary", {
+    title: "Log Diary Entry",
+    description: "Log a diary/journal entry for a baby. Accepts flexible time formats.",
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the event happened: ${DATETIME_DESC}`), text: z.string().describe("The diary entry text"), tags: z.array(z.string()).optional().describe("Optional tags (e.g. ['milestone', 'funny'])") },
+    annotations: WRITE,
+    outputSchema: MutationOutputSchema,
+  }, async ({ babyId, timestamp, text, tags }) => {
+    try { const c = requireClient(client); const id = await c.diary.create(babyId, { timestamp, text, tags }); return ok({ id, message: "Diary entry created" }); } catch (e) { return fail(e); }
   });
 
   return server;
+}
+
+// ── JSON-RPC method detection for unauthenticated discovery ──
+
+const DISCOVERY_METHODS = new Set(["initialize", "tools/list", "ping", "notifications/initialized"]);
+
+function needsAuth(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body);
+    const messages = Array.isArray(parsed) ? parsed : [parsed];
+    return messages.some((msg: { method?: string }) => msg.method && !msg.method.startsWith("notifications/") && !DISCOVERY_METHODS.has(msg.method));
+  } catch {
+    return true; // malformed → require auth, transport will reject
+  }
 }
 
 // ── Auth ──
@@ -392,34 +520,44 @@ export default {
         return new Response("Method not allowed", { status: 405 });
       }
 
-      const token = extractBearerToken(req);
-      if (!token) {
-        return new Response(
-          JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>", hint: "Get your API token from the Nestling app: Settings → Data → API Token" }),
-          {
-            status: 401,
-            headers: {
-              "Content-Type": "application/json",
-              "WWW-Authenticate": `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`,
-            },
-          },
-        );
-      }
+      // Read body once so we can inspect the JSON-RPC method(s)
+      const bodyText = await req.text();
+      const authRequired = needsAuth(bodyText);
 
-      let client: Nestling;
-      try {
-        client = await getOrCreateClient(token);
-      } catch {
-        return new Response(
-          JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
-          {
-            status: 401,
-            headers: {
-              "Content-Type": "application/json",
-              "WWW-Authenticate": `Bearer error="invalid_token", error_description="Authentication failed", resource_metadata="${resourceMetadataUrl}"`,
+      let client: Nestling | null = null;
+      const token = extractBearerToken(req);
+
+      if (authRequired) {
+        if (!token) {
+          return new Response(
+            JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>", hint: "Get your API token from the Nestling app: Settings → Data → API Token" }),
+            {
+              status: 401,
+              headers: {
+                "Content-Type": "application/json",
+                "WWW-Authenticate": `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`,
+              },
             },
-          },
-        );
+          );
+        }
+
+        try {
+          client = await getOrCreateClient(token);
+        } catch {
+          return new Response(
+            JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
+            {
+              status: 401,
+              headers: {
+                "Content-Type": "application/json",
+                "WWW-Authenticate": `Bearer error="invalid_token", error_description="Authentication failed", resource_metadata="${resourceMetadataUrl}"`,
+              },
+            },
+          );
+        }
+      } else if (token) {
+        // Discovery request but token provided — use it if valid
+        try { client = await getOrCreateClient(token); } catch { /* ignore — discovery works without auth */ }
       }
 
       const mcpServer = createServer(client);
@@ -428,7 +566,14 @@ export default {
       });
 
       await mcpServer.connect(transport);
-      return transport.handleRequest(req);
+
+      // Reconstruct request with the consumed body
+      const reconstructed = new Request(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: bodyText,
+      });
+      return transport.handleRequest(reconstructed);
     }
 
     return new Response("Not Found", { status: 404 });
