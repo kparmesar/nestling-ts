@@ -17,12 +17,7 @@ interface Env {
   OAUTH_SECRET: string;
 }
 
-// ── Session + client caches (persist within isolate lifetime) ──
-
-const sessions = new Map<string, {
-  transport: InstanceType<typeof WebStandardStreamableHTTPServerTransport>;
-  server: McpServer;
-}>();
+// ── Client cache (persists within isolate lifetime) ──
 
 const clientCache = new Map<string, Nestling>();
 
@@ -377,55 +372,43 @@ export default {
       });
     }
 
-    // ── MCP endpoint ──
+    // ── MCP endpoint (stateless — each request is independent) ──
 
     if (url.pathname === "/mcp") {
-      const sessionId = req.headers.get("mcp-session-id");
-
-      // Existing session
-      if (sessionId && sessions.has(sessionId)) {
-        const { transport } = sessions.get(sessionId)!;
-        return transport.handleRequest(req);
+      if (req.method === "GET" || req.method === "DELETE") {
+        // Stateless server has no persistent sessions to stream or delete
+        return new Response("Method not allowed", { status: 405 });
       }
 
-      // New session — requires Bearer token
-      if (req.method === "POST" && !sessionId) {
-        const token = extractBearerToken(req);
-        if (!token) {
-          return new Response(
-            JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>", hint: "Get your API token from the Nestling app: Settings → Data → API Token" }),
-            { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" } },
-          );
-        }
-
-        let client: Nestling;
-        try {
-          client = await getOrCreateClient(token);
-        } catch {
-          return new Response(
-            JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
-            { status: 401, headers: { "Content-Type": "application/json" } },
-          );
-        }
-
-        const mcpServer = createServer(client);
-        const transport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-          onsessioninitialized: (id) => {
-            sessions.set(id, { transport, server: mcpServer });
-          },
-        });
-
-        transport.onclose = () => {
-          const id = [...sessions.entries()].find(([, s]) => s.transport === transport)?.[0];
-          if (id) sessions.delete(id);
-        };
-
-        await mcpServer.connect(transport);
-        return transport.handleRequest(req);
+      if (req.method !== "POST") {
+        return new Response("Method not allowed", { status: 405 });
       }
 
-      return new Response("Session not found. Send a new POST without Mcp-Session-Id to start.", { status: 404 });
+      const token = extractBearerToken(req);
+      if (!token) {
+        return new Response(
+          JSON.stringify({ error: "Missing Authorization: Bearer <nestling-api-token>", hint: "Get your API token from the Nestling app: Settings → Data → API Token" }),
+          { status: 401, headers: { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" } },
+        );
+      }
+
+      let client: Nestling;
+      try {
+        client = await getOrCreateClient(token);
+      } catch {
+        return new Response(
+          JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      const mcpServer = createServer(client);
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless — no session tracking
+      });
+
+      await mcpServer.connect(transport);
+      return transport.handleRequest(req);
     }
 
     return new Response("Not Found", { status: 404 });
