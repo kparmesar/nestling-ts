@@ -28,6 +28,12 @@
     "ai"
   ],
   "license": "MIT",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "LICENSE",
+    "README.md"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@supabase/supabase-js": "^2.49.8",

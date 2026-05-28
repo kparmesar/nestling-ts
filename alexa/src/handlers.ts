@@ -1,6 +1,6 @@
 import type { HandlerInput, RequestHandler } from "ask-sdk-core";
 import type { Response } from "ask-sdk-model";
-import { getBabyId, getBabyName, insertEntry, getLastEntry } from "./supabase.js";
+import { getBabyId, getBabyName, insertEntry, updateEntry, findActiveEntry, getLastEntry } from "./supabase.js";
 import { spokenTime, spokenDuration, minutesAgo } from "./time.js";
 
 // ---------------------------------------------------------------------------
@@ -30,15 +30,24 @@ export const StartSleepHandler: RequestHandler = {
     return req.type === "IntentRequest" && req.intent.name === "StartSleepIntent";
   },
   async handle(input) {
-    const attrs = input.attributesManager.getSessionAttributes();
-    if (attrs.sleepStart) {
+    const babyId = await getBabyId();
+    const active = await findActiveEntry(babyId, "sleep");
+    if (active) {
+      const startStr = active.data.start as string;
       return input.responseBuilder
-        .speak(`Sleep timer is already running since ${spokenTime(attrs.sleepStart)}.`)
+        .speak(`Sleep timer is already running since ${spokenTime(startStr)}.`)
         .getResponse();
     }
     const now = new Date().toISOString();
-    attrs.sleepStart = now;
-    input.attributesManager.setSessionAttributes(attrs);
+    await insertEntry(babyId, "sleep", {
+      type: "sleep",
+      start: now,
+      end: null,
+      durationMinutes: null,
+      source: "alexa",
+      isActive: true,
+      notes: "Alexa",
+    }, { startAt: now });
     return input.responseBuilder
       .speak(`Started sleep timer at ${spokenTime(now)}.`)
       .reprompt("Say stop sleep when the baby wakes up.")
@@ -52,33 +61,32 @@ export const StopSleepHandler: RequestHandler = {
     return req.type === "IntentRequest" && req.intent.name === "StopSleepIntent";
   },
   async handle(input) {
-    const attrs = input.attributesManager.getSessionAttributes();
-    if (!attrs.sleepStart) {
+    const babyId = await getBabyId();
+    const active = await findActiveEntry(babyId, "sleep");
+    if (!active) {
       return input.responseBuilder
         .speak("No sleep timer is running. Say start sleep to begin.")
         .reprompt("Say start sleep to begin tracking sleep.")
         .getResponse();
     }
-    const start = attrs.sleepStart as string;
+    const start = active.data.start as string;
     const end = new Date().toISOString();
-    delete attrs.sleepStart;
-    input.attributesManager.setSessionAttributes(attrs);
-
-    const babyId = await getBabyId();
-    const duration = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
-    await insertEntry(babyId, "sleep", {
-      type: "sleep",
-      startTime: start,
-      endTime: end,
-      source: "alexa",
-      notes: "Alexa",
-    });
+    const durationSeconds = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
+    const durationMinutes = Math.round(durationSeconds / 60);
+    await updateEntry(active.id, {
+      ...active.data,
+      end,
+      durationMinutes,
+      isActive: false,
+    }, { endAt: end });
     return input.responseBuilder
-      .speak(`Logged sleep from ${spokenTime(start)} to ${spokenTime(end)}, ${spokenDuration(duration)}.`)
+      .speak(`Logged sleep from ${spokenTime(start)} to ${spokenTime(end)}, ${spokenDuration(durationSeconds)}.`)
       .getResponse();
   },
 };
 
+// Pause/Resume only work within the same Alexa session (session attributes are
+// ephemeral). Cross-session pause is not supported.
 export const PauseSleepHandler: RequestHandler = {
   canHandle(input) {
     const req = input.requestEnvelope.request;
@@ -131,18 +139,18 @@ export const LogNappyHandler: RequestHandler = {
     const babyId = await getBabyId();
     const now = new Date().toISOString();
 
-    // Map spoken terms to entry data
+    // Map spoken terms to canonical Nestling types
     let type: string;
     let spoken: string;
     if (nappyType === "dirty" || nappyType === "poo") {
-      type = "dirty";
+      type = "Dirty";
       spoken = "dirty";
     } else if (nappyType === "both" || nappyType === "wet and dirty") {
-      type = "both";
+      type = "Both";
       spoken = "wet and dirty";
     } else {
-      // wet, wee, pee → wet
-      type = "wet";
+      // wet, wee, pee → Wet
+      type = "Wet";
       spoken = "wet";
     }
 
@@ -169,14 +177,28 @@ export const StartNursingHandler: RequestHandler = {
     return req.type === "IntentRequest" && req.intent.name === "StartNursingIntent";
   },
   async handle(input) {
-    const side = slot(input, "side") ?? "both";
-    const attrs = input.attributesManager.getSessionAttributes();
+    const sideRaw = slot(input, "side") ?? "both";
+    const side = sideRaw.charAt(0).toUpperCase() + sideRaw.slice(1); // Left/Right/Both
+    const babyId = await getBabyId();
+    const active = await findActiveEntry(babyId, "feed");
+    if (active) {
+      return input.responseBuilder
+        .speak(`Nursing is already being tracked since ${spokenTime(active.data.timestamp as string)}.`)
+        .getResponse();
+    }
     const now = new Date().toISOString();
-    attrs.nursingStart = now;
-    attrs.nursingSide = side;
-    input.attributesManager.setSessionAttributes(attrs);
+    await insertEntry(babyId, "feed", {
+      type: "Breastfeeding",
+      timestamp: now,
+      duration: null,
+      amount: null,
+      side,
+      source: "alexa",
+      isActive: true,
+      notes: "Alexa",
+    });
     return input.responseBuilder
-      .speak(`Started nursing on ${side} side at ${spokenTime(now)}.`)
+      .speak(`Started nursing on ${sideRaw} side at ${spokenTime(now)}.`)
       .reprompt("Say switch sides, or stop nursing when finished.")
       .getResponse();
   },
@@ -188,16 +210,16 @@ export const SwitchSidesHandler: RequestHandler = {
     return req.type === "IntentRequest" && req.intent.name === "SwitchSidesIntent";
   },
   async handle(input) {
-    const attrs = input.attributesManager.getSessionAttributes();
-    if (!attrs.nursingStart) {
+    const babyId = await getBabyId();
+    const active = await findActiveEntry(babyId, "feed");
+    if (!active) {
       return input.responseBuilder.speak("No nursing session is active.").getResponse();
     }
-    const current = attrs.nursingSide as string;
-    const newSide = current === "left" ? "right" : "left";
-    attrs.nursingSide = newSide;
-    input.attributesManager.setSessionAttributes(attrs);
+    const current = (active.data.side as string) ?? "Both";
+    const newSide = current === "Left" ? "Right" : "Left";
+    await updateEntry(active.id, { ...active.data, side: newSide });
     return input.responseBuilder
-      .speak(`Switched to ${newSide} side.`)
+      .speak(`Switched to ${newSide.toLowerCase()} side.`)
       .reprompt("Say stop nursing when finished.")
       .getResponse();
   },
@@ -209,32 +231,23 @@ export const StopNursingHandler: RequestHandler = {
     return req.type === "IntentRequest" && req.intent.name === "StopNursingIntent";
   },
   async handle(input) {
-    const attrs = input.attributesManager.getSessionAttributes();
-    if (!attrs.nursingStart) {
+    const babyId = await getBabyId();
+    const active = await findActiveEntry(babyId, "feed");
+    if (!active) {
       return input.responseBuilder.speak("No nursing session is active.").getResponse();
     }
-    const start = attrs.nursingStart as string;
-    const side = attrs.nursingSide as string;
+    const start = active.data.timestamp as string;
+    const side = (active.data.side as string) ?? "Both";
     const end = new Date().toISOString();
-    delete attrs.nursingStart;
-    delete attrs.nursingSide;
-    input.attributesManager.setSessionAttributes(attrs);
-
-    const babyId = await getBabyId();
-    const duration = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
-    await insertEntry(babyId, "feed", {
-      type: "breast",
-      side,
-      startTime: start,
-      endTime: end,
-      duration,
-      timestamp: start,
-      source: "alexa",
-      notes: "Alexa",
+    const durationSeconds = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
+    await updateEntry(active.id, {
+      ...active.data,
+      duration: Math.round(durationSeconds),
+      isActive: false,
     });
     const name = await getBabyName();
     return input.responseBuilder
-      .speak(`Logged ${spokenDuration(duration)} breastfeed on ${side} side for ${name}.`)
+      .speak(`Logged ${spokenDuration(durationSeconds)} breastfeed on ${side.toLowerCase()} side for ${name}.`)
       .getResponse();
   },
 };
@@ -263,9 +276,11 @@ export const LogBottleHandler: RequestHandler = {
     }
 
     await insertEntry(babyId, "feed", {
-      type: "bottle",
-      amount: amountMl,
+      type: "Bottle",
+      amount: amountMl ?? null,
       timestamp: now,
+      duration: null,
+      side: null,
       source: "alexa",
       notes: "Alexa",
     });
@@ -292,8 +307,10 @@ export const LogSolidsHandler: RequestHandler = {
     const now = new Date().toISOString();
 
     await insertEntry(babyId, "feed", {
-      type: "solids",
-      food,
+      type: "Solids",
+      amount: null,
+      duration: null,
+      side: null,
       timestamp: now,
       source: "alexa",
       notes: `Alexa: ${food}`,

@@ -45,33 +45,69 @@ export async function getBabyName(): Promise<string> {
   return data?.[0]?.nickname ?? "your baby";
 }
 
-interface EntryRow {
-  id: string;
-  baby_id: string;
-  type: string;
-  data: Record<string, unknown>;
-  timestamp: string;
-  updated_at: string;
-}
-
 export async function insertEntry(
   babyId: string,
   type: "sleep" | "feed" | "nappy",
   data: Record<string, unknown>,
-): Promise<void> {
+  opts?: { startAt?: string; endAt?: string },
+): Promise<string> {
   const client = await getClient();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const row: EntryRow = {
+  const timestamp = (opts?.startAt ?? data.timestamp ?? now) as string;
+  const row = {
     id,
     baby_id: babyId,
     type,
-    data: { id, babyId, ...data, updatedAt: now },
-    timestamp: now,
+    data: JSON.stringify({ id, babyId, ...data, updatedAt: now }),
+    start_at: opts?.startAt ?? null,
+    end_at: opts?.endAt ?? null,
+    timestamp,
     updated_at: now,
   };
   const { error } = await client.from("entries").insert(row);
   if (error) throw new Error(`Failed to insert ${type}: ${error.message}`);
+  return id;
+}
+
+export async function updateEntry(
+  entryId: string,
+  data: Record<string, unknown>,
+  opts?: { startAt?: string; endAt?: string; timestamp?: string },
+): Promise<void> {
+  const client = await getClient();
+  const now = new Date().toISOString();
+  const update: Record<string, unknown> = {
+    data: JSON.stringify({ ...data, updatedAt: now }),
+    updated_at: now,
+  };
+  if (opts?.startAt !== undefined) update.start_at = opts.startAt;
+  if (opts?.endAt !== undefined) update.end_at = opts.endAt;
+  if (opts?.timestamp !== undefined) update.timestamp = opts.timestamp;
+  const { error } = await client.from("entries").update(update).eq("id", entryId);
+  if (error) throw new Error(`Failed to update entry: ${error.message}`);
+}
+
+export async function findActiveEntry(
+  babyId: string,
+  type: "sleep" | "feed",
+): Promise<{ id: string; data: Record<string, unknown> } | null> {
+  const client = await getClient();
+  const { data, error } = await client
+    .from("entries")
+    .select("id, data")
+    .eq("baby_id", babyId)
+    .eq("type", type)
+    .order("timestamp", { ascending: false })
+    .limit(5);
+  if (error || !data?.length) return null;
+  for (const row of data) {
+    const parsed = typeof row.data === "string" ? JSON.parse(row.data) : row.data;
+    if (parsed?.isActive === true) {
+      return { id: row.id, data: parsed };
+    }
+  }
+  return null;
 }
 
 export async function getLastEntry(

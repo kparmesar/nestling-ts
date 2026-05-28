@@ -121,6 +121,30 @@ describe("parseUserDateTime", () => {
     expect(result).toBe("2026-05-07T15:00:00.000Z");
   });
 
+  test("handles London BST timezone (UTC+1)", () => {
+    // 3pm London BST = 2pm UTC
+    const result = parseUserDateTime("2026-05-07 3pm", { timezone: "Europe/London" });
+    expect(result).toBe("2026-05-07T14:00:00.000Z");
+  });
+
+  test("handles New York EDT timezone (UTC-4)", () => {
+    // 3pm New York EDT = 7pm UTC
+    const result = parseUserDateTime("2026-05-07 3pm", { timezone: "America/New_York" });
+    expect(result).toBe("2026-05-07T19:00:00.000Z");
+  });
+
+  test("handles Sydney AEST timezone (UTC+10)", () => {
+    // 3pm Sydney AEST = 5am UTC
+    const result = parseUserDateTime("2026-05-07 3pm", { timezone: "Australia/Sydney" });
+    expect(result).toBe("2026-05-07T05:00:00.000Z");
+  });
+
+  test("handles London GMT (winter, UTC+0)", () => {
+    // 3pm London in January (GMT) = 3pm UTC
+    const result = parseUserDateTime("2026-01-07 3pm", { timezone: "Europe/London" });
+    expect(result).toBe("2026-01-07T15:00:00.000Z");
+  });
+
   test("12pm is noon", () => {
     const result = new Date(parseUserDateTime("12pm"));
     expect(result.getHours()).toBe(12);

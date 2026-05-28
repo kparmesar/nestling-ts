@@ -76,7 +76,7 @@ export function parseUserDateTime(
   if (dayTimeInput) {
     const { dayWord, timeStr } = dayTimeInput;
     const { hours, minutes } = parseTimeComponent(timeStr);
-    const base = dayOffset(dayWord);
+    const base = dayOffset(dayWord, opts?.timezone);
     return buildDateTime(base, hours, minutes, opts?.timezone);
   }
 
@@ -95,7 +95,7 @@ export function parseUserDateTime(
   // Time only: "3pm", "3:30pm", "15:30" → today
   try {
     const { hours, minutes } = parseTimeComponent(trimmed);
-    const base = new Date();
+    const base = dayOffset("today", opts?.timezone);
     return buildDateTime(base, hours, minutes, opts?.timezone);
   } catch {
     // Fall through
@@ -234,16 +234,34 @@ function describeInput(value: string, maxLength = 80): string {
   return `"${value.slice(0, visible)}..." (length ${value.length})`;
 }
 
-function dayOffset(word: string): Date {
-  const now = new Date();
+function dayOffset(word: string, timezone?: string): Date {
+  let year: number, month: number, day: number;
+  if (timezone) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const get = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+    year = get("year");
+    month = get("month") - 1;
+    day = get("day");
+  } else {
+    const now = new Date();
+    year = now.getFullYear();
+    month = now.getMonth();
+    day = now.getDate();
+  }
   switch (word) {
     case "yesterday":
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      return new Date(year, month, day - 1);
     case "tomorrow":
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      return new Date(year, month, day + 1);
     case "today":
     default:
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return new Date(year, month, day);
   }
 }
 
@@ -263,7 +281,7 @@ function buildDateTime(
     // Use Intl to find the UTC offset for this timezone at this date/time
     const utcGuess = new Date(Date.UTC(year, month, day, hours, minutes, 0));
     const offset = getTimezoneOffsetMs(utcGuess, timezone);
-    const adjusted = new Date(utcGuess.getTime() + offset);
+    const adjusted = new Date(utcGuess.getTime() - offset);
     return adjusted.toISOString();
   }
 
