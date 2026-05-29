@@ -1,7 +1,7 @@
 {
   "name": "nestling-ts",
-  "version": "0.2.4",
-  "description": "TypeScript client, CLI, and MCP server for the Nestling baby tracking app",
+  "version": "0.3.0",
+  "description": "TypeScript client, CLI, and local MCP server for the Nestling baby tracking app",
   "type": "module",
   "main": "src/index.ts",
   "bin": {
@@ -12,8 +12,6 @@
     "cli": "bun run src/cli/cli.ts",
     "nestling": "bun run src/cli/cli.ts",
     "mcp": "bun run src/mcp/server.ts",
-    "worker:dev": "wrangler dev",
-    "worker:deploy": "wrangler deploy",
     "test": "bun test",
     "lint": "tsc --noEmit",
     "format": "prettier --write src/"
@@ -28,12 +26,6 @@
     "ai"
   ],
   "license": "MIT",
-  "files": [
-    "src/**/*.ts",
-    "!src/**/*.test.ts",
-    "LICENSE",
-    "README.md"
-  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@supabase/supabase-js": "^2.49.8",
@@ -41,7 +33,6 @@
   },
   "devDependencies": {
     "@types/bun": "^1.2.14",
-    "typescript": "^5.8.3",
-    "wrangler": "^4.95.0"
+    "typescript": "^5.8.3"
   }
 }

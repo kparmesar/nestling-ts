@@ -17,9 +17,34 @@ interface Env {
   OAUTH_SECRET: string;
 }
 
-// ── Client cache (persists within isolate lifetime) ──
+// ── Client cache (persists within isolate lifetime, with TTL) ──
 
-const clientCache = new Map<string, Nestling>();
+interface CachedClient { client: Nestling; createdAt: number; }
+const clientCache = new Map<string, CachedClient>();
+const CLIENT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// ── Rate limiter (sliding window per token, persists within isolate) ──
+
+interface RateBucket { timestamps: number[]; }
+const rateBuckets = new Map<string, RateBucket>();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 120; // 120 requests per minute per token
+
+function isRateLimited(token: string): boolean {
+  const now = Date.now();
+  let bucket = rateBuckets.get(token);
+  if (!bucket) {
+    bucket = { timestamps: [] };
+    rateBuckets.set(token, bucket);
+  }
+  // Evict old timestamps outside the window
+  bucket.timestamps = bucket.timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+  if (bucket.timestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+  bucket.timestamps.push(now);
+  return false;
+}
 
 // ── Crypto helpers for stateless auth codes ──
 
@@ -132,7 +157,11 @@ function ok(data: unknown, totalResults?: number) {
 
 function fail(err: unknown) {
   const isNestling = err instanceof NestlingError;
-  const structured = { error: isNestling ? err.name : "Error", message: err instanceof Error ? err.message : String(err), category: isNestling ? err.category : "unknown", retryable: isNestling ? err.retryable : false, recovery: isNestling ? err.recovery : "Check your configuration and try again." };
+  // Mask internal error details (Supabase/Postgres messages may leak schema info)
+  const safeMessage = isNestling
+    ? err.message
+    : "An internal error occurred. Please try again.";
+  const structured = { error: isNestling ? err.name : "Error", message: safeMessage, category: isNestling ? err.category : "unknown", retryable: isNestling ? err.retryable : false, recovery: isNestling ? err.recovery : "Check your configuration and try again." };
   return {
     structuredContent: structured,
     content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
@@ -152,6 +181,10 @@ const HOSTED_ICON_SOURCE_URL = "https://nestling-app.com/favicon-512.png";
 const BabyIdSchema = z.string().uuid().describe("The baby's UUID");
 const FlexDateTimeSchema = z.string().transform((val) => parseUserDateTime(val, { timezone }));
 const NonNegativeNumberSchema = z.number().finite().nonnegative();
+const AmountMlSchema = z.number().finite().nonnegative().max(5000).describe("Amount in millilitres (max 5000)");
+const NotesSchema = z.string().max(10000).optional().describe("Optional notes (max 10,000 chars)");
+const DiaryTextSchema = z.string().max(10000).describe("The diary entry text (max 10,000 chars)");
+const TagsSchema = z.array(z.string().max(100)).max(50).optional().describe("Optional tags (max 50 tags, each max 100 chars)");
 const DateRangeSchema = { start: FlexDateTimeSchema.describe(`Start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`End: ${DATETIME_DESC}`) };
 
 // ── Shared annotations ──
@@ -190,7 +223,7 @@ function createServer(client: Nestling | null, issuer: string): McpServer {
   const server = new McpServer({
     name: "nestling",
     title: "Nestling",
-    version: "0.2.4",
+    version: "0.3.0",
     description: "Read and log your baby's sleep, feeds, nappies, and diary entries from the Nestling baby tracking app.",
     websiteUrl: "https://nestling-app.com",
     icons: [{ src: `${issuer}/icon.png`, mimeType: "image/png" }],
@@ -282,7 +315,7 @@ function createServer(client: Nestling | null, issuer: string): McpServer {
   server.registerTool("create_sleep", {
     title: "Log Sleep",
     description: "Log a sleep session for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, start: FlexDateTimeSchema.describe(`Sleep start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`Sleep end: ${DATETIME_DESC}`), notes: z.string().optional().describe("Optional notes") },
+    inputSchema: { babyId: BabyIdSchema, start: FlexDateTimeSchema.describe(`Sleep start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`Sleep end: ${DATETIME_DESC}`), notes: NotesSchema },
     annotations: WRITE,
     outputSchema: MutationOutputSchema,
   }, async ({ babyId, start, end, notes }) => {
@@ -292,7 +325,7 @@ function createServer(client: Nestling | null, issuer: string): McpServer {
   server.registerTool("create_feed", {
     title: "Log Feed",
     description: "Log a feeding entry for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the feed happened: ${DATETIME_DESC}`), type: z.enum(["Breastfeeding","Bottle","Solids","Expressing"]).describe("Feed type"), durationSeconds: NonNegativeNumberSchema.optional().describe("Duration in seconds"), amountMl: NonNegativeNumberSchema.optional().describe("Amount in millilitres"), side: z.enum(["Left","Right","Both"]).optional().describe("Which side (for breastfeeding)"), notes: z.string().optional().describe("Optional notes") },
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the feed happened: ${DATETIME_DESC}`), type: z.enum(["Breastfeeding","Bottle","Solids","Expressing"]).describe("Feed type"), durationSeconds: NonNegativeNumberSchema.optional().describe("Duration in seconds"), amountMl: AmountMlSchema.optional(), side: z.enum(["Left","Right","Both"]).optional().describe("Which side (for breastfeeding)"), notes: NotesSchema },
     annotations: WRITE,
     outputSchema: MutationOutputSchema,
   }, async ({ babyId, timestamp, type, durationSeconds, amountMl, side, notes }) => {
@@ -302,7 +335,7 @@ function createServer(client: Nestling | null, issuer: string): McpServer {
   server.registerTool("create_nappy", {
     title: "Log Nappy Change",
     description: "Log a nappy/diaper change for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the nappy change happened: ${DATETIME_DESC}`), type: z.enum(["Wet","Dirty","Both"]).describe("Nappy type"), notes: z.string().optional().describe("Optional notes") },
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the nappy change happened: ${DATETIME_DESC}`), type: z.enum(["Wet","Dirty","Both"]).describe("Nappy type"), notes: NotesSchema },
     annotations: WRITE,
     outputSchema: MutationOutputSchema,
   }, async ({ babyId, timestamp, type, notes }) => {
@@ -312,7 +345,7 @@ function createServer(client: Nestling | null, issuer: string): McpServer {
   server.registerTool("create_diary", {
     title: "Log Diary Entry",
     description: "Log a diary/journal entry for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the event happened: ${DATETIME_DESC}`), text: z.string().describe("The diary entry text"), tags: z.array(z.string()).optional().describe("Optional tags (e.g. ['milestone', 'funny'])") },
+    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the event happened: ${DATETIME_DESC}`), text: DiaryTextSchema, tags: TagsSchema },
     annotations: WRITE,
     outputSchema: MutationOutputSchema,
   }, async ({ babyId, timestamp, text, tags }) => {
@@ -339,10 +372,15 @@ function needsAuth(body: string): boolean {
 // ── Auth ──
 
 async function getOrCreateClient(token: string): Promise<Nestling> {
-  if (clientCache.has(token)) return clientCache.get(token)!;
+  const cached = clientCache.get(token);
+  if (cached && Date.now() - cached.createdAt < CLIENT_TTL_MS) {
+    return cached.client;
+  }
+  // Evict stale entry if expired
+  if (cached) clientCache.delete(token);
   const c = new Nestling({ apiToken: token });
   await c.signIn();
-  clientCache.set(token, c);
+  clientCache.set(token, { client: c, createdAt: Date.now() });
   return c;
 }
 
@@ -361,6 +399,8 @@ export default {
     const issuer = `${url.protocol}//${url.host}`;
     const resourceMetadataUrl = `${issuer}/.well-known/oauth-protected-resource/mcp`;
 
+    // CORS: intentionally permissive ("*") because MCP clients connect from diverse origins.
+    // Authentication is enforced via Bearer tokens, not origin checks.
     const corsHeaders: Record<string, string> = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
@@ -368,14 +408,21 @@ export default {
       "Access-Control-Expose-Headers": "Mcp-Session-Id",
     };
 
+    // Security headers applied to all responses
+    const securityHeaders: Record<string, string> = {
+      "X-Content-Type-Options": "nosniff",
+      "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+      "X-Frame-Options": "DENY",
+    };
+
     // CORS preflight
     if (req.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { headers: { ...corsHeaders, ...securityHeaders } });
     }
 
     // Health check
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ status: "ok" }), { headers: { "Content-Type": "application/json", ...securityHeaders } });
     }
 
     // Same-host icon endpoint for server metadata discovery
@@ -555,7 +602,23 @@ export default {
               status: 401,
               headers: {
                 "Content-Type": "application/json",
+                ...securityHeaders,
                 "WWW-Authenticate": `Bearer error="invalid_token", error_description="Missing Authorization header", resource_metadata="${resourceMetadataUrl}"`,
+              },
+            },
+          );
+        }
+
+        // Rate limiting (per-token sliding window)
+        if (isRateLimited(token)) {
+          return new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many requests. Please wait before retrying.", retryAfterSeconds: 60 }),
+            {
+              status: 429,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "60",
+                ...securityHeaders,
               },
             },
           );
@@ -570,6 +633,7 @@ export default {
               status: 401,
               headers: {
                 "Content-Type": "application/json",
+                ...securityHeaders,
                 "WWW-Authenticate": `Bearer error="invalid_token", error_description="Authentication failed", resource_metadata="${resourceMetadataUrl}"`,
               },
             },

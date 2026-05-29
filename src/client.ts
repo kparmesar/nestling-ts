@@ -173,7 +173,8 @@ class EntriesDomain<T> {
       .eq("type", this.entryType)
       .gte("timestamp", range.start.toISOString())
       .lte("timestamp", range.end.toISOString())
-      .order("timestamp", { ascending: true });
+      .order("timestamp", { ascending: true })
+      .limit(1000);
 
     const { data, error } = await query;
     if (error) throw new NestlingError(error.message, "api", true, "Retry the request.");
