@@ -10,6 +10,8 @@
  *   - "just now" (alias for now)
  */
 
+import { zonedTimeToUtc } from "./time.js";
+
 const RELATIVE_PATTERN =
   /^(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?)\s*ago$/i;
 
@@ -22,11 +24,19 @@ const TIME_24H_PATTERN =
 const ISO_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 
+const ISO_LOCAL_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/;
+
 const DAY_WORDS = new Set(["today", "yesterday", "tomorrow"]);
 
 export interface ParseDateTimeOptions {
   /** IANA timezone for resolving wall-clock times (e.g. "Europe/London"). Defaults to local system TZ. */
   timezone?: string;
+  /**
+   * Read ISO times without an offset ("2026-05-07T20:00") as wall-clock time in `timezone`.
+   * Off by default, where they keep the runtime's local zone, as before.
+   */
+  isoInTimezone?: boolean;
 }
 
 /**
@@ -45,6 +55,16 @@ export function parseUserDateTime(
 
   // ISO 8601 pass-through
   if (ISO_PATTERN.test(trimmed)) {
+    // Without an offset, the time is wall-clock time in the given zone, not the runtime's zone.
+    const local = trimmed.match(ISO_LOCAL_PATTERN);
+    if (local && opts?.timezone && opts.isoInTimezone) {
+      const [, y, mo, d, h, mi, sec] = local;
+      const base = zonedTimeToUtc(+y, +mo, +d, +h, +mi, opts.timezone);
+      if (Number.isNaN(base.getTime())) {
+        throw new Error(`Invalid ISO date/time: ${describeInput(trimmed)}`);
+      }
+      return new Date(base.getTime() + Number(sec ?? 0) * 1000).toISOString();
+    }
     const d = new Date(trimmed);
     if (Number.isNaN(d.getTime())) {
       throw new Error(`Invalid ISO date/time: ${describeInput(trimmed)}`);

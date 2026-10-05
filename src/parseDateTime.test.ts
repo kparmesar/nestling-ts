@@ -7,6 +7,22 @@ describe("parseUserDateTime", () => {
     expect(result).toBe("2026-05-07T20:00:00.000Z");
   });
 
+  test("with isoInTimezone, reads ISO without an offset as wall-clock time in the given zone", () => {
+    const opts = (timezone: string) => ({ timezone, isoInTimezone: true });
+    expect(parseUserDateTime("2026-07-07T20:00", opts("Europe/London"))).toBe("2026-07-07T19:00:00.000Z");
+    expect(parseUserDateTime("2026-01-07T20:00:30", opts("Europe/London"))).toBe("2026-01-07T20:00:30.000Z");
+    expect(parseUserDateTime("2026-07-07T20:00", opts("America/Los_Angeles"))).toBe("2026-07-08T03:00:00.000Z");
+  });
+
+  test("with isoInTimezone, keeps an explicit offset", () => {
+    expect(parseUserDateTime("2026-07-07T20:00:00Z", { timezone: "Europe/London", isoInTimezone: true })).toBe("2026-07-07T20:00:00.000Z");
+  });
+
+  test("without isoInTimezone, ISO without an offset keeps the runtime's zone, as before", () => {
+    const naive = "2026-07-07T20:00";
+    expect(parseUserDateTime(naive, { timezone: "America/Los_Angeles" })).toBe(new Date(naive).toISOString());
+  });
+
   test("passes through ISO with offset", () => {
     const result = parseUserDateTime("2026-05-07T20:00:00+02:00");
     expect(result).toBe("2026-05-07T18:00:00.000Z");

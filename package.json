@@ -14,7 +14,10 @@
     "mcp": "bun run src/mcp/server.ts",
     "test": "bun test",
     "lint": "tsc --noEmit",
-    "format": "prettier --write src/"
+    "format": "prettier --write src/",
+    "build:ui": "bun run scripts/build-ui.ts",
+    "preview:ui": "bun run scripts/preview/serve.ts",
+    "deploy": "bun run build:ui && wrangler deploy"
   },
   "keywords": [
     "nestling",
@@ -27,7 +30,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/mcp-extensions": "0.1.0",
     "@supabase/supabase-js": "^2.49.8",
     "zod": "^4.4.3"
   },

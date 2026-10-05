@@ -1,0 +1,15 @@
+{
+  "name": "nestling",
+  "displayName": "Nestling",
+  "version": "1.0.0",
+  "description": "Ask about your baby's sleep, feeds and nappies, see the day at a glance, and log new entries from your Nestling baby tracker.",
+  "author": {
+    "name": "Nestling",
+    "email": "support@nestling-app.com",
+    "url": "https://nestling-app.com"
+  },
+  "homepage": "https://nestling-app.com",
+  "repository": "https://github.com/kparmesar/nestling-ts",
+  "license": "MIT",
+  "keywords": ["baby", "sleep", "feeding", "nappies", "parenting", "tracker"]
+}

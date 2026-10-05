@@ -6,15 +6,15 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { z } from "zod";
 import { Nestling } from "../client.js";
-import { NestlingError } from "../types.js";
-import { parseUserDateTime } from "../parseDateTime.js";
+import { ENTRYPOINT_ICONS, registerNestlingTools, SERVER_VERSION } from "./tools.js";
 
 // ── Types ──
 
 interface Env {
   OAUTH_SECRET: string;
+  /** Domain-verification token from the OpenAI Platform plugin dashboard */
+  OPENAI_APPS_CHALLENGE?: string;
 }
 
 // ── Client cache (persists within isolate lifetime, with TTL) ──
@@ -46,6 +46,43 @@ function isRateLimited(token: string): boolean {
   return false;
 }
 
+// ── Failed sign-in limiter (per account and client IP, persists within isolate) ──
+// Raw API tokens are email + password, so failed sign-ins are capped to stop guessing.
+// The key includes the account: Claude and ChatGPT send many users' requests from shared
+// IPs, and one user's stale token must not lock everyone else out.
+
+const failedSignIns = new Map<string, number[]>();
+const FAILED_SIGN_IN_WINDOW_MS = 10 * 60 * 1000;
+const FAILED_SIGN_IN_MAX = 10;
+
+function signInKey(token: string, ip: string): string {
+  try {
+    const decoded = atob(token);
+    const newline = decoded.indexOf("\n");
+    if (newline > 0) return `${ip}|${decoded.slice(0, newline).trim().toLowerCase()}`;
+  } catch {
+    // Not a valid API token; it fails sign-in without a network call
+  }
+  return `${ip}|?`;
+}
+
+class TooManySignInsError extends Error {}
+
+async function signInLimited(token: string, ip: string): Promise<Nestling> {
+  const now = Date.now();
+  const key = signInKey(token, ip);
+  const recent = (failedSignIns.get(key) ?? []).filter(t => now - t < FAILED_SIGN_IN_WINDOW_MS);
+  if (recent.length >= FAILED_SIGN_IN_MAX) throw new TooManySignInsError();
+  try {
+    return await getOrCreateClient(token);
+  } catch (e) {
+    recent.push(now);
+    if (failedSignIns.size > 10_000) failedSignIns.clear(); // bound memory in a long-lived isolate
+    failedSignIns.set(key, recent);
+    throw e;
+  }
+}
+
 // ── Crypto helpers for stateless auth codes ──
 
 function b64url(buf: Uint8Array): string {
@@ -56,12 +93,13 @@ function b64urlDecode(s: string): Uint8Array {
   const bin = atob(b);
   return Uint8Array.from(bin, c => c.charCodeAt(0));
 }
-async function deriveKey(secret: string): Promise<CryptoKey> {
-  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+async function deriveKey(secret: string, purpose = ""): Promise<CryptoKey> {
+  // Auth codes use the bare secret (unchanged so in-flight codes survive deploys); access tokens use a separate key
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(purpose ? `${secret}:${purpose}` : secret));
   return crypto.subtle.importKey("raw", hash, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
-async function encryptAuthCode(payload: object, secret: string): Promise<string> {
-  const key = await deriveKey(secret);
+async function encryptAuthCode(payload: object, secret: string, purpose = ""): Promise<string> {
+  const key = await deriveKey(secret, purpose);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
   const buf = new Uint8Array(12 + ct.byteLength);
@@ -69,13 +107,55 @@ async function encryptAuthCode(payload: object, secret: string): Promise<string>
   buf.set(new Uint8Array(ct), 12);
   return b64url(buf);
 }
-async function decryptAuthCode(code: string, secret: string): Promise<any> {
-  const key = await deriveKey(secret);
+async function decryptAuthCode(code: string, secret: string, purpose = ""): Promise<any> {
+  const key = await deriveKey(secret, purpose);
   const buf = b64urlDecode(code);
   const iv = buf.slice(0, 12);
   const ct = buf.slice(12);
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return JSON.parse(new TextDecoder().decode(pt));
+}
+
+// Access tokens wrap the user's API token so the bearer credential issued to MCP
+// clients only works against this server, not as a Nestling sign-in.
+const ACCESS_TOKEN_PREFIX = "nst1_";
+const REFRESH_TOKEN_PREFIX = "nsr1_";
+// Long enough that MCP clients which never refresh are not signed out daily
+const ACCESS_TOKEN_TTL_S = 30 * 24 * 60 * 60;
+const REFRESH_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+
+/** Access + refresh token pair for a token endpoint response. */
+async function issueTokens(apiToken: string, audience: string, secret: string) {
+  const now = Date.now();
+  return {
+    access_token: ACCESS_TOKEN_PREFIX + await encryptAuthCode({ t: apiToken, aud: audience, exp: now + ACCESS_TOKEN_TTL_S * 1000 }, secret, "access"),
+    token_type: "bearer",
+    expires_in: ACCESS_TOKEN_TTL_S,
+    refresh_token: REFRESH_TOKEN_PREFIX + await encryptAuthCode({ t: apiToken, aud: audience, exp: now + REFRESH_TOKEN_TTL_MS }, secret, "refresh"),
+  };
+}
+
+async function apiTokenFromRefreshToken(refreshToken: string, audience: string, secret: string): Promise<string | null> {
+  if (!refreshToken.startsWith(REFRESH_TOKEN_PREFIX)) return null;
+  try {
+    const payload = await decryptAuthCode(refreshToken.slice(REFRESH_TOKEN_PREFIX.length), secret, "refresh");
+    return payload.aud === audience && typeof payload.t === "string" && Date.now() < payload.exp ? payload.t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The user's API token behind a bearer credential, or null if it was not issued for this server. */
+async function apiTokenFromBearer(bearer: string, audience: string, secret: string): Promise<string | null> {
+  // Connections made before access tokens existed send the API token directly
+  if (!bearer.startsWith(ACCESS_TOKEN_PREFIX)) return bearer;
+  try {
+    const payload = await decryptAuthCode(bearer.slice(ACCESS_TOKEN_PREFIX.length), secret, "access");
+    const fresh = typeof payload.exp === "number" && Date.now() < payload.exp;
+    return payload.aud === audience && typeof payload.t === "string" && fresh ? payload.t : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── OAuth helpers ──
@@ -87,15 +167,64 @@ function oauthMeta(issuer: string) {
     token_endpoint: `${issuer}/oauth/token`,
     registration_endpoint: `${issuer}/oauth/register`,
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     token_endpoint_auth_methods_supported: ["none"],
     code_challenge_methods_supported: ["S256"],
     scopes_supported: [],
+    // ChatGPT uses its stable redirect URI only when the issuer is returned with every authorization response (RFC 9207)
+    authorization_response_iss_parameter_supported: true,
   };
 }
 
-function authorizeHTML(params: { client_id: string; redirect_uri: string; state?: string; code_challenge: string; code_challenge_method: string }) {
-  const hidden = Object.entries(params).map(([k, v]) => v != null ? `<input type="hidden" name="${k}" value="${v}">` : "").join("\n");
+// MCP requires open dynamic client registration, so anyone can mint a client_id.
+// What stops a self-registered client from phishing tokens is that auth codes are
+// only ever sent to these known MCP clients, or to the user's own machine.
+const ALLOWED_REDIRECT_URIS = new Map([
+  ["https://claude.ai/api/mcp/auth_callback", "Claude"],
+  ["https://claude.com/api/mcp/auth_callback", "Claude"],
+  ["https://chatgpt.com/connector_platform_oauth_redirect", "ChatGPT"],
+  ["https://vscode.dev/redirect", "VS Code"],
+  ["cursor://anysphere.cursor-mcp/oauth/callback", "Cursor"],
+  ["https://www.cursor.com/agents/mcp/oauth/callback", "Cursor"],
+]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+// ChatGPT's per-connector callback, used by connections created before the stable redirect
+const CHATGPT_CONNECTOR_REDIRECT = /^https:\/\/chatgpt\.com\/connector\/oauth\/[A-Za-z0-9_-]{1,128}$/;
+
+function isAllowedRedirectUri(raw: unknown): raw is string {
+  if (typeof raw !== "string" || raw.length > 2048) return false;
+  if (ALLOWED_REDIRECT_URIS.has(raw) || CHATGPT_CONNECTOR_REDIRECT.test(raw)) return true;
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  // Loopback redirects (Claude Code, desktop clients, MCP Inspector) can only reach the user's own machine
+  return u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname) && !u.username && !u.password && !u.hash;
+}
+
+function redirectAppName(redirectUri: string): string {
+  if (CHATGPT_CONNECTOR_REDIRECT.test(redirectUri)) return "ChatGPT";
+  return ALLOWED_REDIRECT_URIS.get(redirectUri) ?? "an app on this device";
+}
+
+function escapeHTML(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+const HTML_HEADERS: Record<string, string> = {
+  "Content-Type": "text/html;charset=utf-8",
+  "Cache-Control": "no-store",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src https://nestling-app.com; frame-ancestors 'none'; base-uri 'none'",
+};
+
+function errorHTML(message: string, status = 400) {
+  return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Nestling</title></head><body style="font-family:-apple-system,sans-serif;max-width:420px;margin:4rem auto;padding:1rem"><h1>Can't connect</h1><p>${escapeHTML(message)}</p></body></html>`, { status, headers: HTML_HEADERS });
+}
+
+function authorizeHTML(params: { client_id: string; redirect_uri: string; state?: string; code_challenge: string; code_challenge_method: string }, error?: string) {
+  const hidden = Object.entries(params).map(([k, v]) => v != null ? `<input type="hidden" name="${k}" value="${escapeHTML(v)}">` : "").join("\n");
+  const destination = escapeHTML(redirectAppName(params.redirect_uri));
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in — Nestling</title>
@@ -132,10 +261,10 @@ input[type=password]::placeholder{color:#a8a29e}
 <span>Nestling</span>
 </div>
 <h1>Connect your account</h1>
-<p class="subtitle">Paste your API token to give this app access to your baby's data.</p>
+<p class="subtitle">Paste your API token to give <b>${destination}</b> access to your baby's data. Only continue if you started this from that app.</p>
 <form method="POST" action="/oauth/authorize">
 ${hidden}
-<label for="token">API Token</label>
+${error ? `<div class="error">${escapeHTML(error)}</div>\n` : ""}<label for="token">API Token</label>
 <input type="password" id="token" name="token" placeholder="Paste your Nestling API token" required autocomplete="off">
 <button class="btn" type="submit">Connect</button>
 </form>
@@ -145,219 +274,27 @@ ${hidden}
 </div></body></html>`;
 }
 
-// ── MCP tool helpers ──
+// ── MCP server ──
 
-function ok(data: unknown, totalResults?: number) {
-  const structured = { data, totalResults: totalResults ?? (Array.isArray(data) ? data.length : 1) };
-  return {
-    structuredContent: structured,
-    content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
-  };
-}
-
-function fail(err: unknown) {
-  const isNestling = err instanceof NestlingError;
-  // Mask internal error details (Supabase/Postgres messages may leak schema info)
-  const safeMessage = isNestling
-    ? err.message
-    : "An internal error occurred. Please try again.";
-  const structured = { error: isNestling ? err.name : "Error", message: safeMessage, category: isNestling ? err.category : "unknown", retryable: isNestling ? err.retryable : false, recovery: isNestling ? err.recovery : "Check your configuration and try again." };
-  return {
-    structuredContent: structured,
-    content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
-    isError: true,
-  };
-}
-
-function requireClient(client: Nestling | null): Nestling {
-  if (!client) throw new Error("Authentication required — provide a Bearer token to call tools.");
-  return client;
-}
-
-const DATETIME_DESC = 'Date/time — accepts ISO 8601 ("2026-05-07T20:00:00Z"), relative ("2 hours ago", "now"), day+time ("today 3pm", "yesterday 8:30pm"), time-only ("3pm"), or date+time ("2026-05-07 8pm")';
-const timezone = "UTC"; // Worker doesn't know user TZ; tools accept ISO or relative
 const HOSTED_ICON_SOURCE_URL = "https://nestling-app.com/favicon-512.png";
 
-const BabyIdSchema = z.string().uuid().describe("The baby's UUID");
-const FlexDateTimeSchema = z.string().transform((val) => parseUserDateTime(val, { timezone }));
-const NonNegativeNumberSchema = z.number().finite().nonnegative();
-const AmountMlSchema = z.number().finite().nonnegative().max(5000).describe("Amount in millilitres (max 5000)");
-const NotesSchema = z.string().max(10000).optional().describe("Optional notes (max 10,000 chars)");
-const DiaryTextSchema = z.string().max(10000).describe("The diary entry text (max 10,000 chars)");
-const TagsSchema = z.array(z.string().max(100)).max(50).optional().describe("Optional tags (max 50 tags, each max 100 chars)");
-const DateRangeSchema = { start: FlexDateTimeSchema.describe(`Start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`End: ${DATETIME_DESC}`) };
-
-// ── Shared annotations ──
-
-const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
-const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
-
-// ── Shared output schemas ──
-
-const ErrorOutputSchema = {
-  error: z.string(),
-  message: z.string(),
-  category: z.string(),
-  retryable: z.boolean(),
-  recovery: z.string(),
-};
-
-const ListOutputSchema = {
-  data: z.array(z.record(z.string(), z.unknown())).describe("Array of records"),
-  totalResults: z.number().int().nonnegative(),
-};
-
-const RecordOutputSchema = {
-  data: z.record(z.string(), z.unknown()).describe("Single record"),
-  totalResults: z.number().int().nonnegative(),
-};
-
-const MutationOutputSchema = {
-  data: z.object({ id: z.string(), message: z.string() }),
-  totalResults: z.number().int().nonnegative(),
-};
-
-// ── Server factory ──
-
-function createServer(client: Nestling | null, issuer: string): McpServer {
+function createServer(client: Nestling | null, issuer: string, chatgpt: boolean): McpServer {
   const server = new McpServer({
     name: "nestling",
     title: "Nestling",
-    version: "0.3.0",
+    version: SERVER_VERSION,
     description: "Read and log your baby's sleep, feeds, nappies, and diary entries from the Nestling baby tracking app.",
     websiteUrl: "https://nestling-app.com",
     icons: [{ src: `${issuer}/icon.png`, mimeType: "image/png" }],
   });
-
-  // ── Discovery ──
-
-  server.registerTool("get_capabilities", {
-    title: "Get Capabilities",
-    description: "Discovery: list available data sources and tools",
-    annotations: READ_ONLY,
-    outputSchema: RecordOutputSchema,
-  }, async () => {
-    return ok({ tools: ["get_capabilities","get_user","list_babies","get_baby","list_sleep","list_feeds","list_nappies","list_diary","create_sleep","create_feed","create_nappy","create_diary"], dataSources: ["babies","sleep","feeds","nappies","diary"], timezone, readOnly: false });
-  });
-
-  // ── Read-only tools ──
-
-  server.registerTool("get_user", {
-    title: "Get User",
-    description: "Get the authenticated user's profile (email, ID)",
-    annotations: READ_ONLY,
-    outputSchema: RecordOutputSchema,
-  }, async () => {
-    try { return ok(await requireClient(client).getUser()); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("list_babies", {
-    title: "List Babies",
-    description: "List all babies the user has access to (owned + shared)",
-    annotations: READ_ONLY,
-    outputSchema: ListOutputSchema,
-  }, async () => {
-    try { return ok(await requireClient(client).babies.list()); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("get_baby", {
-    title: "Get Baby",
-    description: "Get details for a specific baby by ID",
-    inputSchema: { babyId: BabyIdSchema },
-    annotations: READ_ONLY,
-    outputSchema: RecordOutputSchema,
-  }, async ({ babyId }) => {
-    try { return ok(await requireClient(client).babies.get(babyId)); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("list_sleep", {
-    title: "List Sleep Sessions",
-    description: "List sleep sessions for a baby within a date range",
-    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
-    annotations: READ_ONLY,
-    outputSchema: ListOutputSchema,
-  }, async ({ babyId, start, end }) => {
-    try { return ok(await requireClient(client).sleep.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("list_feeds", {
-    title: "List Feeds",
-    description: "List feeding entries (breast, bottle, solids) for a baby within a date range",
-    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
-    annotations: READ_ONLY,
-    outputSchema: ListOutputSchema,
-  }, async ({ babyId, start, end }) => {
-    try { return ok(await requireClient(client).feed.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("list_nappies", {
-    title: "List Nappies",
-    description: "List nappy/diaper entries for a baby within a date range",
-    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
-    annotations: READ_ONLY,
-    outputSchema: ListOutputSchema,
-  }, async ({ babyId, start, end }) => {
-    try { return ok(await requireClient(client).nappies.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("list_diary", {
-    title: "List Diary Entries",
-    description: "List diary/journal entries for a baby within a date range",
-    inputSchema: { babyId: BabyIdSchema, ...DateRangeSchema },
-    annotations: READ_ONLY,
-    outputSchema: ListOutputSchema,
-  }, async ({ babyId, start, end }) => {
-    try { return ok(await requireClient(client).diary.list(babyId, { start: new Date(start), end: new Date(end) })); } catch (e) { return fail(e); }
-  });
-
-  // ── Write tools ──
-
-  server.registerTool("create_sleep", {
-    title: "Log Sleep",
-    description: "Log a sleep session for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, start: FlexDateTimeSchema.describe(`Sleep start: ${DATETIME_DESC}`), end: FlexDateTimeSchema.describe(`Sleep end: ${DATETIME_DESC}`), notes: NotesSchema },
-    annotations: WRITE,
-    outputSchema: MutationOutputSchema,
-  }, async ({ babyId, start, end, notes }) => {
-    try { const c = requireClient(client); const id = await c.sleep.create(babyId, { start, end, notes }); return ok({ id, message: "Sleep session created" }); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("create_feed", {
-    title: "Log Feed",
-    description: "Log a feeding entry for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the feed happened: ${DATETIME_DESC}`), type: z.enum(["Breastfeeding","Bottle","Solids","Expressing"]).describe("Feed type"), durationSeconds: NonNegativeNumberSchema.optional().describe("Duration in seconds"), amountMl: AmountMlSchema.optional(), side: z.enum(["Left","Right","Both"]).optional().describe("Which side (for breastfeeding)"), notes: NotesSchema },
-    annotations: WRITE,
-    outputSchema: MutationOutputSchema,
-  }, async ({ babyId, timestamp, type, durationSeconds, amountMl, side, notes }) => {
-    try { const c = requireClient(client); const id = await c.feed.create(babyId, { timestamp, type, durationSeconds, amountMl, side, notes }); return ok({ id, message: "Feed entry created" }); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("create_nappy", {
-    title: "Log Nappy Change",
-    description: "Log a nappy/diaper change for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the nappy change happened: ${DATETIME_DESC}`), type: z.enum(["Wet","Dirty","Both"]).describe("Nappy type"), notes: NotesSchema },
-    annotations: WRITE,
-    outputSchema: MutationOutputSchema,
-  }, async ({ babyId, timestamp, type, notes }) => {
-    try { const c = requireClient(client); const id = await c.nappies.create(babyId, { timestamp, type, notes }); return ok({ id, message: "Nappy entry created" }); } catch (e) { return fail(e); }
-  });
-
-  server.registerTool("create_diary", {
-    title: "Log Diary Entry",
-    description: "Log a diary/journal entry for a baby. Accepts flexible time formats.",
-    inputSchema: { babyId: BabyIdSchema, timestamp: FlexDateTimeSchema.describe(`When the event happened: ${DATETIME_DESC}`), text: DiaryTextSchema, tags: TagsSchema },
-    annotations: WRITE,
-    outputSchema: MutationOutputSchema,
-  }, async ({ babyId, timestamp, text, tags }) => {
-    try { const c = requireClient(client); const id = await c.diary.create(babyId, { timestamp, text, tags }); return ok({ id, message: "Diary entry created" }); } catch (e) { return fail(e); }
-  });
-
+  registerNestlingTools(server, { client, issuer, chatgpt });
   return server;
 }
 
 // ── JSON-RPC method detection for unauthenticated discovery ──
 
-const DISCOVERY_METHODS = new Set(["initialize", "tools/list", "ping", "notifications/initialized"]);
+// Resources are the static plugin UI, so hosts can prefetch them before sign-in.
+const DISCOVERY_METHODS = new Set(["initialize", "tools/list", "resources/list", "resources/templates/list", "resources/read", "ping", "notifications/initialized"]);
 
 function needsAuth(body: string): boolean {
   try {
@@ -398,6 +335,7 @@ export default {
     const url = new URL(req.url);
     const issuer = `${url.protocol}//${url.host}`;
     const resourceMetadataUrl = `${issuer}/.well-known/oauth-protected-resource/mcp`;
+    const clientIp = req.headers.get("cf-connecting-ip") ?? "unknown";
 
     // CORS: intentionally permissive ("*") because MCP clients connect from diverse origins.
     // Authentication is enforced via Bearer tokens, not origin checks.
@@ -444,6 +382,20 @@ export default {
       });
     }
 
+    // OpenAI plugin domain verification
+    if (url.pathname === "/.well-known/openai-apps-challenge") {
+      if (!env.OPENAI_APPS_CHALLENGE) return new Response("Not Found", { status: 404, headers: securityHeaders });
+      return new Response(env.OPENAI_APPS_CHALLENGE, { headers: { "Content-Type": "text/plain;charset=utf-8", "Cache-Control": "no-store", ...securityHeaders } });
+    }
+
+    // Monochrome sidebar icons for plugin entrypoints
+    const iconMatch = url.pathname.match(/^\/icons\/([a-z-]+)\.svg$/);
+    if (iconMatch && ENTRYPOINT_ICONS[iconMatch[1]]) {
+      return new Response(ENTRYPOINT_ICONS[iconMatch[1]], {
+        headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*", ...securityHeaders },
+      });
+    }
+
     // ── OAuth 2.0 endpoints ──
 
     // Authorization server metadata
@@ -462,13 +414,20 @@ export default {
 
     // Dynamic client registration (RFC 7591)
     if (url.pathname === "/oauth/register" && req.method === "POST") {
-      const body = await req.json() as Record<string, unknown>;
-      const clientId = crypto.randomUUID();
+      let body: Record<string, unknown>;
+      try { body = await req.json() as Record<string, unknown>; } catch {
+        return Response.json({ error: "invalid_client_metadata", error_description: "Body must be JSON" }, { status: 400 });
+      }
+      const redirectUris = body.redirect_uris;
+      if (!Array.isArray(redirectUris) || redirectUris.length === 0 || redirectUris.length > 10 || !redirectUris.every(isAllowedRedirectUri)) {
+        return Response.json({ error: "invalid_redirect_uri", error_description: "redirect_uris must be a supported MCP client callback or a loopback address" }, { status: 400 });
+      }
+      const clientName = typeof body.client_name === "string" ? body.client_name.slice(0, 100) : "MCP Client";
       return Response.json({
-        client_id: clientId,
-        client_name: body.client_name ?? "MCP Client",
-        redirect_uris: body.redirect_uris ?? [],
-        grant_types: ["authorization_code"],
+        client_id: crypto.randomUUID(),
+        client_name: clientName,
+        redirect_uris: redirectUris,
+        grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         token_endpoint_auth_method: "none",
       }, { status: 201 });
@@ -485,7 +444,13 @@ export default {
           code_challenge: url.searchParams.get("code_challenge") ?? "",
           code_challenge_method: url.searchParams.get("code_challenge_method") ?? "S256",
         };
-        return new Response(authorizeHTML(params), { headers: { "Content-Type": "text/html;charset=utf-8" } });
+        if (!isAllowedRedirectUri(params.redirect_uri)) {
+          return errorHTML("This app isn't allowed to connect to Nestling.");
+        }
+        if (!params.code_challenge || params.code_challenge_method !== "S256") {
+          return errorHTML("This app sent an incomplete sign-in request. Please try again from the app.");
+        }
+        return new Response(authorizeHTML(params), { headers: HTML_HEADERS });
       }
 
       if (req.method === "POST") {
@@ -498,20 +463,20 @@ export default {
         const clientId = form.get("client_id") as string;
 
         if (!token || !redirectUri || !codeChallenge) {
-          return new Response("Missing required fields", { status: 400 });
+          return errorHTML("Some details are missing. Please try again from the app.");
+        }
+        if (!isAllowedRedirectUri(redirectUri)) {
+          return errorHTML("This app isn't allowed to connect to Nestling.");
         }
 
         // Validate the token by trying to sign in
         try {
-          await getOrCreateClient(token);
-        } catch {
+          await signInLimited(token, clientIp);
+        } catch (e) {
+          if (e instanceof TooManySignInsError) return errorHTML("Too many attempts. Wait 10 minutes, then try again.", 429);
           // Show form again with error
-          const params = { client_id: clientId, redirect_uri: redirectUri, state: state ?? undefined, code_challenge: codeChallenge, code_challenge_method: "S256" };
-          const html = authorizeHTML(params).replace(
-            '<label for="token">',
-            '<div class="error">Invalid API token. Please check and try again.</div>\n<label for="token">',
-          );
-          return new Response(html, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+          const params = { client_id: clientId ?? "", redirect_uri: redirectUri, state: state ?? undefined, code_challenge: codeChallenge, code_challenge_method: "S256" };
+          return new Response(authorizeHTML(params, "That token didn't work. Check it and try again."), { headers: HTML_HEADERS });
         }
 
         // Create encrypted auth code
@@ -526,6 +491,7 @@ export default {
         const callback = new URL(redirectUri);
         callback.searchParams.set("code", code);
         if (state) callback.searchParams.set("state", state);
+        callback.searchParams.set("iss", issuer);
 
         return Response.redirect(callback.toString(), 302);
       }
@@ -535,14 +501,32 @@ export default {
     if (url.pathname === "/oauth/token" && req.method === "POST") {
       let body: Record<string, string>;
       const ct = req.headers.get("content-type") ?? "";
-      if (ct.includes("application/x-www-form-urlencoded")) {
-        const form = await req.formData();
-        body = Object.fromEntries(form.entries()) as Record<string, string>;
-      } else {
-        body = await req.json() as Record<string, string>;
+      try {
+        if (ct.includes("application/x-www-form-urlencoded")) {
+          const form = await req.formData();
+          body = Object.fromEntries(form.entries()) as Record<string, string>;
+        } else {
+          body = await req.json() as Record<string, string>;
+        }
+      } catch {
+        return Response.json({ error: "invalid_request", error_description: "Body must be form-encoded or JSON" }, { status: 400 });
       }
 
-      const { grant_type, code, code_verifier } = body;
+      const { grant_type, code, code_verifier, redirect_uri, client_id } = body;
+
+      if (grant_type === "refresh_token") {
+        const apiToken = typeof body.refresh_token === "string" ? await apiTokenFromRefreshToken(body.refresh_token, `${issuer}/mcp`, env.OAUTH_SECRET) : null;
+        if (!apiToken) {
+          return Response.json({ error: "invalid_grant", error_description: "Invalid or expired refresh token" }, { status: 400 });
+        }
+        // The API token stops working when the user creates a new one; make them reconnect then.
+        try {
+          await signInLimited(apiToken, clientIp);
+        } catch {
+          return Response.json({ error: "invalid_grant", error_description: "Sign in to Nestling again" }, { status: 400 });
+        }
+        return Response.json(await issueTokens(apiToken, `${issuer}/mcp`, env.OAUTH_SECRET), { headers: { "Cache-Control": "no-store" } });
+      }
 
       if (grant_type !== "authorization_code" || !code) {
         return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
@@ -560,19 +544,21 @@ export default {
         return Response.json({ error: "invalid_grant", error_description: "Authorization code expired" }, { status: 400 });
       }
 
-      // Verify PKCE
-      if (code_verifier) {
-        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
-        const expectedChallenge = b64url(new Uint8Array(digest));
-        if (expectedChallenge !== payload.codeChallenge) {
-          return Response.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400 });
-        }
+      // The code must be redeemed by the same client, for the same redirect, it was issued to
+      if ((redirect_uri && redirect_uri !== payload.redirectUri) || (client_id && payload.clientId && client_id !== payload.clientId)) {
+        return Response.json({ error: "invalid_grant", error_description: "Authorization code was issued to a different client" }, { status: 400 });
       }
 
-      return Response.json({
-        access_token: payload.token,
-        token_type: "bearer",
-      });
+      // Verify PKCE (mandatory — public clients have no other proof of possession)
+      if (!code_verifier) {
+        return Response.json({ error: "invalid_request", error_description: "code_verifier is required" }, { status: 400 });
+      }
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code_verifier));
+      if (b64url(new Uint8Array(digest)) !== payload.codeChallenge) {
+        return Response.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400 });
+      }
+
+      return Response.json(await issueTokens(payload.token, `${issuer}/mcp`, env.OAUTH_SECRET), { headers: { "Cache-Control": "no-store" } });
     }
 
     // ── MCP endpoint (stateless — each request is independent) ──
@@ -592,7 +578,8 @@ export default {
       const authRequired = needsAuth(bodyText);
 
       let client: Nestling | null = null;
-      const token = extractBearerToken(req);
+      const bearer = extractBearerToken(req);
+      const token = bearer ? await apiTokenFromBearer(bearer, `${issuer}/mcp`, env.OAUTH_SECRET) : null;
 
       if (authRequired) {
         if (!token) {
@@ -625,8 +612,14 @@ export default {
         }
 
         try {
-          client = await getOrCreateClient(token);
-        } catch {
+          client = await signInLimited(token, clientIp);
+        } catch (e) {
+          if (e instanceof TooManySignInsError) {
+            return new Response(
+              JSON.stringify({ error: "rate_limited", message: "Too many failed sign-ins. Wait 10 minutes, then try again.", retryAfterSeconds: 600 }),
+              { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "600", ...securityHeaders } },
+            );
+          }
           return new Response(
             JSON.stringify({ error: "Authentication failed. Check your Nestling API token." }),
             {
@@ -639,12 +632,11 @@ export default {
             },
           );
         }
-      } else if (token) {
-        // Discovery request but token provided — use it if valid
-        try { client = await getOrCreateClient(token); } catch { /* ignore — discovery works without auth */ }
       }
 
-      const mcpServer = createServer(client, issuer);
+      // ChatGPT's connector identifies itself as "openai-mcp/<version>"
+      const chatgpt = /openai/i.test(req.headers.get("user-agent") ?? "");
+      const mcpServer = createServer(client, issuer, chatgpt);
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless — no session tracking
       });

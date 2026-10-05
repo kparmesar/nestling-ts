@@ -1,0 +1,237 @@
+/* Nestling plugin UI. Builds on the host theme from @openai/mcp-extensions/app/styles.css. */
+
+:root {
+  --nest: light-dark(#8a6440, #d9b88f);
+  --nest-soft: color-mix(in srgb, var(--nest) 14%, transparent);
+  --sleep: light-dark(#5b6bbf, #9aa6e8);
+  --feed: light-dark(#b0762f, #e0a95f);
+  --nappy: light-dark(#3f8f7a, #7cc9b3);
+  --diary: light-dark(#8b6aa8, #bfa2d8);
+  --gap: 12px;
+}
+
+body {
+  background: transparent;
+}
+
+#root {
+  display: grid;
+  gap: var(--gap);
+  padding: 12px;
+}
+
+[data-mode="fullscreen"] #root,
+[data-view="log"] #root {
+  max-width: 680px;
+  margin-inline: auto;
+  padding: 16px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spread {
+  justify-content: space-between;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.title {
+  display: grid;
+  min-width: 0;
+}
+
+.title h2 {
+  font-size: calc(var(--font-size-base) * 1.2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.baby-select {
+  width: auto;
+  max-width: 180px;
+}
+
+.date-nav .btn {
+  min-width: 28px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.stat {
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid var(--accent-color, var(--nest));
+}
+
+.stat .value {
+  font-size: calc(var(--font-size-base) * 1.45);
+  font-weight: var(--font-weight-medium, 500);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stat.sleep { --accent-color: var(--sleep); }
+.stat.feed { --accent-color: var(--feed); }
+.stat.nappy { --accent-color: var(--nappy); }
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.actions .btn {
+  inline-size: 100%;
+  min-height: 36px;
+}
+
+.log-actions .btn {
+  min-height: 56px;
+  font-size: calc(var(--font-size-base) * 1.1);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-color, var(--nest));
+}
+
+.sleep { --accent-color: var(--sleep); }
+.feed { --accent-color: var(--feed); }
+.nappy { --accent-color: var(--nappy); }
+.diary { --accent-color: var(--diary); }
+
+.timeline {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline li {
+  display: grid;
+  grid-template-columns: 64px 8px 1fr;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.timeline li:first-child {
+  border-top: 0;
+}
+
+.timeline .time {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timeline .dot {
+  align-self: center;
+}
+
+.timeline .what {
+  min-width: 0;
+}
+
+.timeline .detail,
+.timeline .notes {
+  color: var(--muted-foreground);
+}
+
+.timeline .notes {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 20px 8px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+form.card {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field .form-label {
+  margin: 0;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segmented .btn {
+  flex: 1 1 0;
+  inline-size: auto;
+}
+
+.btn[aria-pressed="true"] {
+  border-color: var(--nest) !important;
+  color: var(--foreground) !important;
+  background: var(--nest-soft) !important;
+}
+
+.toast {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--nest-soft);
+}
+
+.toast.error {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+
+.message {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 16px;
+}
+
+.skeleton {
+  height: 64px;
+  border-radius: calc(var(--radius) * 1.6);
+  background: var(--muted);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
